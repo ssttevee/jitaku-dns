@@ -1,4 +1,4 @@
-package main
+package webui
 
 import (
 	"html"
@@ -7,6 +7,8 @@ import (
 	"strings"
 
 	"github.com/miekg/dns"
+	"github.com/ssttevee/jitaku-dns/internal"
+	"github.com/ssttevee/jitaku-dns/internal/dns/upstream"
 )
 
 var digTypes = []dns.Type{
@@ -28,8 +30,14 @@ var digTypes = []dns.Type{
 	dns.Type(dns.TypeTXT),
 }
 
-func (c *Jitaku) RegisterWebUI(mux *http.ServeMux, logChan <-chan *LogEntry) {
-	logsQueue := NewPubSub(logChan)
+type Controller interface {
+	LogChan() <-chan *internal.LogEntry
+	ProcessMessage(msg *dns.Msg) (*internal.MessageResult, error)
+	ForwardStrategy() upstream.ForwardStrategy
+}
+
+func RegisterWebUI(mux *http.ServeMux, c Controller) {
+	logsQueue := NewPubSub(c.LogChan())
 
 	mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(RootLayout(RootLayoutProps{
@@ -47,7 +55,7 @@ func (c *Jitaku) RegisterWebUI(mux *http.ServeMux, logChan <-chan *LogEntry) {
 
 		name := q.Get("name")
 
-		var res *MessageResult
+		var res *internal.MessageResult
 		var err error
 		if name != "" && typ != 0 {
 			msg := &dns.Msg{}
@@ -113,14 +121,15 @@ func (c *Jitaku) RegisterWebUI(mux *http.ServeMux, logChan <-chan *LogEntry) {
 	})
 
 	mux.HandleFunc("GET /logs", func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Sec-Fetch-Mode") != "cors" || r.Header.Get("Accept") != "text/event-stream" {
+		if r.Header.Get("Accept") != "text/event-stream" {
 			w.Write([]byte(RootLayout(
 				RootLayoutProps{
 					title:    "Logs",
 					pathname: r.URL.Path,
 				},
-				"<h1>Logs</h1>",
 				`
+<h1>Logs</h1>
+<p class="text-secondary">No logs are stored. Only requests made after this page was opened are shown here.</p>
 <table class="table mt-5">
 	<thead>
 		<tr>
@@ -153,13 +162,13 @@ func (c *Jitaku) RegisterWebUI(mux *http.ServeMux, logChan <-chan *LogEntry) {
 	})
 
 	mux.HandleFunc("GET /settings", func(w http.ResponseWriter, r *http.Request) {
-		currentStrategy := EForwardStrategyLinear
-		if c.Strategy != nil {
-			currentStrategy = c.Strategy.Enum()
+		currentStrategy := upstream.DefaultStrategy.Enum()
+		if s := c.ForwardStrategy(); s != nil {
+			currentStrategy = s.Enum()
 		}
 
 		var radioOptions string
-		for _, strategy := range EForwardStrategyValues {
+		for _, strategy := range upstream.ForwardStrategyKinds {
 			var attrs string
 			if currentStrategy == strategy {
 				attrs = ` checked`
@@ -225,7 +234,7 @@ func (c *Jitaku) RegisterWebUI(mux *http.ServeMux, logChan <-chan *LogEntry) {
 }
 
 type DigResultProps struct {
-	result *MessageResult
+	result *internal.MessageResult
 	err    error
 }
 
@@ -254,7 +263,7 @@ func DigResult(props DigResultProps) string {
 }
 
 type LogRowProps struct {
-	entry *LogEntry
+	entry *internal.LogEntry
 }
 
 func LogRow(props LogRowProps) string {

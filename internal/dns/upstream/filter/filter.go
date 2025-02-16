@@ -1,4 +1,4 @@
-package main
+package filter
 
 import (
 	"fmt"
@@ -75,8 +75,8 @@ func (f *ABPFilter) ShouldBlock(msg *dns.Msg) (bool, error) {
 	return false, nil
 }
 
-func fetchAndParseFilter(hc *http.Client, url string) (Filter, error) {
-	res, err := hc.Get("https://adguardteam.github.io/HostlistsRegistry/assets/filter_1.txt")
+func FetchAndParseFilter(hc *http.Client, url string) (Filter, error) {
+	res, err := hc.Get(url)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch adblock list: %v", err)
 	}

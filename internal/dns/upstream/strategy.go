@@ -1,4 +1,4 @@
-package main
+package upstream
 
 import (
 	"fmt"
@@ -8,71 +8,73 @@ import (
 	"github.com/miekg/dns"
 )
 
-type EForwardStrategy string
+var DefaultStrategy = &LinearStrategy{}
+
+type ForwardStrategyKind string
 
 const (
-	EForwardStrategyLinear     EForwardStrategy = "linear"
-	EForwardStrategyRandom     EForwardStrategy = "random"
-	EForwardStrategyRoundRobin EForwardStrategy = "round-robin"
-	EForwardStrategyFirstBack  EForwardStrategy = "first-back"
+	ForwardStrategyKindLinear     ForwardStrategyKind = "linear"
+	ForwardStrategyKindRandom     ForwardStrategyKind = "random"
+	ForwardStrategyKindRoundRobin ForwardStrategyKind = "round-robin"
+	ForwardStrategyKindFirstBack  ForwardStrategyKind = "first-back"
 )
 
-func (s EForwardStrategy) Valid() bool {
+var ForwardStrategyKinds = []ForwardStrategyKind{
+	ForwardStrategyKindLinear,
+	ForwardStrategyKindRandom,
+	ForwardStrategyKindRoundRobin,
+	ForwardStrategyKindFirstBack,
+}
+
+func (s ForwardStrategyKind) Valid() bool {
 	switch s {
-	case EForwardStrategyLinear, EForwardStrategyRandom, EForwardStrategyRoundRobin, EForwardStrategyFirstBack:
+	case ForwardStrategyKindLinear, ForwardStrategyKindRandom, ForwardStrategyKindRoundRobin, ForwardStrategyKindFirstBack:
 		return true
 	}
 
 	return false
 }
 
-func (s EForwardStrategy) String() string {
+func (s ForwardStrategyKind) String() string {
 	switch s {
-	case EForwardStrategyLinear:
+	case ForwardStrategyKindLinear:
 		return "Sequential"
-	case EForwardStrategyRandom:
+	case ForwardStrategyKindRandom:
 		return "Random"
-	case EForwardStrategyRoundRobin:
+	case ForwardStrategyKindRoundRobin:
 		return "Round Robin"
-	case EForwardStrategyFirstBack:
+	case ForwardStrategyKindFirstBack:
 		return "First Back"
 	}
 
 	panic(fmt.Sprintf("Unknown strategy %q", string(s)))
 }
 
-func (s EForwardStrategy) New() IForwardStrategy {
+func (s ForwardStrategyKind) New() ForwardStrategy {
 	switch s {
-	case EForwardStrategyLinear:
+	case ForwardStrategyKindLinear:
 		return &LinearStrategy{}
-	case EForwardStrategyRandom:
+	case ForwardStrategyKindRandom:
 		return NewRandomStrategy(time.Now().UnixNano())
-	case EForwardStrategyRoundRobin:
+	case ForwardStrategyKindRoundRobin:
 		return &RoundRobinStrategy{}
-	case EForwardStrategyFirstBack:
+	case ForwardStrategyKindFirstBack:
 		return &FirstBackStrategy{}
 	}
 
 	panic(fmt.Sprintf("Unknown strategy %q", string(s)))
 }
 
-var EForwardStrategyValues = []EForwardStrategy{
-	EForwardStrategyLinear,
-	EForwardStrategyRandom,
-	EForwardStrategyRoundRobin,
-	EForwardStrategyFirstBack,
-}
-
-type IForwardStrategy interface {
-	Enum() EForwardStrategy
+type ForwardStrategy interface {
+	Enum() ForwardStrategyKind
 	String() string
 	ForwardMessage(upstreams []Upstream, msg *dns.Msg) (*dns.Msg, int, error)
 }
 
 type LinearStrategy struct{}
 
-func (s *LinearStrategy) Enum() EForwardStrategy {
-	return EForwardStrategyLinear
+func (s *LinearStrategy) Enum() ForwardStrategyKind {
+	return ForwardStrategyKindLinear
 }
 
 func (s *LinearStrategy) String() string {
@@ -98,8 +100,8 @@ type RandomStrategy struct {
 	rand *rand.Rand
 }
 
-func (s *RandomStrategy) Enum() EForwardStrategy {
-	return EForwardStrategyRandom
+func (s *RandomStrategy) Enum() ForwardStrategyKind {
+	return ForwardStrategyKindRandom
 }
 
 func NewRandomStrategy(seed int64) *RandomStrategy {
@@ -126,8 +128,8 @@ type RoundRobinStrategy struct {
 	pos int
 }
 
-func (s *RoundRobinStrategy) Enum() EForwardStrategy {
-	return EForwardStrategyRoundRobin
+func (s *RoundRobinStrategy) Enum() ForwardStrategyKind {
+	return ForwardStrategyKindRoundRobin
 }
 
 func (s *RoundRobinStrategy) String() string {
@@ -142,8 +144,8 @@ func (s *RoundRobinStrategy) ForwardMessage(upstreams []Upstream, msg *dns.Msg) 
 
 type FirstBackStrategy struct{}
 
-func (s *FirstBackStrategy) Enum() EForwardStrategy {
-	return EForwardStrategyFirstBack
+func (s *FirstBackStrategy) Enum() ForwardStrategyKind {
+	return ForwardStrategyKindFirstBack
 }
 
 func (s *FirstBackStrategy) String() string {

@@ -1,4 +1,4 @@
-package main
+package config
 
 import (
 	"errors"
@@ -8,6 +8,13 @@ import (
 	"net/http"
 	"net/url"
 	"time"
+
+	"github.com/ssttevee/jitaku-dns/internal/dns/dohutil"
+	"github.com/ssttevee/jitaku-dns/internal/dns/upstream"
+	"github.com/ssttevee/jitaku-dns/internal/dns/upstream/doh"
+	"github.com/ssttevee/jitaku-dns/internal/dns/upstream/filter"
+	"github.com/ssttevee/jitaku-dns/internal/dns/upstream/pool"
+	"github.com/ssttevee/jitaku-dns/internal/dns/upstream/rewrite"
 )
 
 type FilterConfig struct {
@@ -22,8 +29,8 @@ type RewriteConfig struct {
 }
 
 type UpstreamConfig struct {
-	Servers  []string          `toml:"servers"`
-	Strategy *EForwardStrategy `toml:"strategy"`
+	Servers  []string                      `toml:"servers"`
+	Strategy *upstream.ForwardStrategyKind `toml:"strategy"`
 
 	Fallback  []string `toml:"fallback"`
 	Bootstrap []string `toml:"bootstrap"`
@@ -37,7 +44,7 @@ type Config struct {
 
 var ErrNoClient = errors.New("no http client")
 
-func serverToUpstream(hc *http.Client, server string) (Upstream, string, error) {
+func serverToUpstream(hc *http.Client, server string) (upstream.Upstream, string, error) {
 	if u, _ := url.Parse(server); u != nil {
 		if u.Scheme == "tcp" || u.Scheme == "udp" {
 			host := u.Host
@@ -45,7 +52,7 @@ func serverToUpstream(hc *http.Client, server string) (Upstream, string, error) 
 				host += net.JoinHostPort(u.Host, "53")
 			}
 
-			return &ConnPoolUpstream{
+			return &pool.ConnPoolUpstream{
 				Net:  u.Scheme,
 				Addr: host,
 			}, u.Scheme + "://" + u.Host, nil
@@ -56,8 +63,8 @@ func serverToUpstream(hc *http.Client, server string) (Upstream, string, error) 
 				return nil, "", ErrNoClient
 			}
 
-			if validatedServer, _ := dohValidateServer(hc, server); validatedServer != "" {
-				return &DoHUpstream{
+			if validatedServer, _ := dohutil.ValidateServer(hc, server); validatedServer != "" {
+				return &doh.DoHUpstream{
 					Client: hc,
 					URL:    validatedServer,
 				}, validatedServer, nil
@@ -76,7 +83,7 @@ func serverToUpstream(hc *http.Client, server string) (Upstream, string, error) 
 
 	if host, port, err := net.SplitHostPort(server); err == nil {
 		if port != "53" {
-			return &ConnPoolUpstream{
+			return &pool.ConnPoolUpstream{
 				Addr: server,
 			}, server, nil
 		}
@@ -85,7 +92,7 @@ func serverToUpstream(hc *http.Client, server string) (Upstream, string, error) 
 	}
 
 	if net.ParseIP(server) != nil {
-		return &ConnPoolUpstream{
+		return &pool.ConnPoolUpstream{
 			Addr: server + ":53",
 		}, server, nil
 	}
@@ -94,26 +101,26 @@ func serverToUpstream(hc *http.Client, server string) (Upstream, string, error) 
 }
 
 type ValidatedConfig struct {
-	Upstreams          [][]Upstream
-	Strategy           IForwardStrategy
-	BootstrapUpstreams []Upstream
+	Upstreams          [][]upstream.Upstream
+	Strategy           upstream.ForwardStrategy
+	BootstrapUpstreams []upstream.Upstream
 }
 
 func (c *Config) ValidateConfig() (*ValidatedConfig, error) {
 	var hc *http.Client
 
-	var strategy IForwardStrategy
+	var strategy upstream.ForwardStrategy
 	if c.Upstream.Strategy != nil && c.Upstream.Strategy.Valid() {
 		c.Upstream.Strategy.New()
 	} else {
-		strategy = &LinearStrategy{}
+		strategy = upstream.DefaultStrategy
 	}
 
-	var upstreams []Upstream
-	var fallback []Upstream
-	var bootstrap []Upstream
+	var upstreams []upstream.Upstream
+	var fallback []upstream.Upstream
+	var bootstrap []upstream.Upstream
 	if c.Upstream != nil {
-		bootstrap = make([]Upstream, len(c.Upstream.Bootstrap))
+		bootstrap = make([]upstream.Upstream, len(c.Upstream.Bootstrap))
 		for i, server := range c.Upstream.Bootstrap {
 			log.Printf("INFO: checking bootstrap server %s", server)
 			if upstream, formattedServer, err := serverToUpstream(nil, server); err != nil {
@@ -129,14 +136,14 @@ func (c *Config) ValidateConfig() (*ValidatedConfig, error) {
 		}
 
 		if len(bootstrap) > 0 {
-			hc = createDoHClient(&LinearStrategy{}, func() []Upstream {
+			hc = dohutil.CreateHttpClient(upstream.DefaultStrategy, func() []upstream.Upstream {
 				return bootstrap
 			})
 
 			hc.Timeout = 5 * time.Second
 		}
 
-		upstreams = make([]Upstream, len(c.Upstream.Servers))
+		upstreams = make([]upstream.Upstream, len(c.Upstream.Servers))
 		for i, server := range c.Upstream.Servers {
 			log.Printf("INFO: checking upstream server %s", server)
 			if upstream, formattedServer, err := serverToUpstream(hc, server); err != nil {
@@ -147,7 +154,7 @@ func (c *Config) ValidateConfig() (*ValidatedConfig, error) {
 			}
 		}
 
-		fallback = make([]Upstream, len(c.Upstream.Fallback))
+		fallback = make([]upstream.Upstream, len(c.Upstream.Fallback))
 		for i, server := range c.Upstream.Fallback {
 			log.Printf("INFO: checking fallback server %s", server)
 			if upstream, formattedServer, err := serverToUpstream(hc, server); err != nil {
@@ -163,20 +170,20 @@ func (c *Config) ValidateConfig() (*ValidatedConfig, error) {
 		hc = http.DefaultClient
 	}
 
-	var filters []Upstream
+	var filters []upstream.Upstream
 	for _, filterConfig := range c.Filters {
 		if filterConfig.Disabled {
 			continue
 		}
 
 		log.Printf("INFO: fetching filter from %s", filterConfig.URL)
-		filter, err := fetchAndParseFilter(hc, filterConfig.URL)
+		f, err := filter.FetchAndParseFilter(hc, filterConfig.URL)
 		if err != nil {
 			return nil, fmt.Errorf("failed to fetch filter %s: %w", filterConfig.URL, err)
 		}
 
-		filters = append(filters, &FilterUpstream{
-			Filter: filter,
+		filters = append(filters, &filter.FilterUpstream{
+			Filter: f,
 		})
 	}
 
@@ -195,10 +202,10 @@ func (c *Config) ValidateConfig() (*ValidatedConfig, error) {
 		}
 	}
 
-	var finalUpstreams [][]Upstream
+	var finalUpstreams [][]upstream.Upstream
 	if len(rewrites4) > 0 || len(rewrites6) > 0 {
-		finalUpstreams = append(finalUpstreams, []Upstream{
-			&RewriteUpstream{
+		finalUpstreams = append(finalUpstreams, []upstream.Upstream{
+			&rewrite.RewriteUpstream{
 				V4: rewrites4,
 				V6: rewrites6,
 			},
@@ -224,7 +231,7 @@ func (c *Config) ValidateConfig() (*ValidatedConfig, error) {
 	}, nil
 }
 
-var defaultConfig = &Config{
+var DefaultConfig = &Config{
 	Upstream: &UpstreamConfig{
 		Servers: []string{
 			"https://cloudflare-dns.com/dns-query",

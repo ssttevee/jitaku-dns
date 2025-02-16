@@ -1,4 +1,4 @@
-package main
+package webui
 
 type PubSub[T any] struct {
 	subs map[chan T]struct{}

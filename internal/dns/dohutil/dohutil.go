@@ -1,4 +1,4 @@
-package main
+package dohutil
 
 import (
 	"bytes"
@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"math/rand"
 	"net"
 	"net/http"
@@ -15,9 +16,63 @@ import (
 	"time"
 
 	"github.com/miekg/dns"
+	"github.com/ssttevee/jitaku-dns/internal/dns/upstream"
 )
 
-func createDoHClient(strategy IForwardStrategy, getUpstreams func() []Upstream) *http.Client {
+type cacheItem struct {
+	mu   sync.RWMutex
+	cond *sync.Cond
+
+	ips  []net.IP
+	prev *int
+	ttl  time.Time
+}
+
+func (item *cacheItem) Update(host string, strategy upstream.ForwardStrategy, upstreams []upstream.Upstream) error {
+	if !item.mu.TryLock() {
+		return nil
+	}
+
+	defer item.mu.Unlock()
+
+	if time.Now().After(item.ttl) {
+		ttls := make([]uint32, 0, 8)
+		ips := make([]net.IP, 0, 8)
+		for _, t := range []uint16{dns.TypeA, dns.TypeAAAA} {
+			var msg dns.Msg
+			msg.SetQuestion(dns.Fqdn(host), t)
+			res, _, err := strategy.ForwardMessage(upstreams, &msg)
+			if err != nil {
+				return fmt.Errorf("failed to forward message: %w", err)
+			}
+
+			for _, rec := range res.Answer {
+				if a, ok := rec.(*dns.A); ok {
+					ips = append(ips, a.A)
+					ttls = append(ttls, a.Hdr.Ttl)
+				} else if aaaa, ok := rec.(*dns.AAAA); ok {
+					ips = append(ips, aaaa.AAAA)
+					ttls = append(ttls, aaaa.Hdr.Ttl)
+				}
+			}
+		}
+
+		item.ips = ips
+		ttl := uint32(math.MaxUint32)
+		for _, t := range ttls {
+			if t < ttl {
+				ttl = t
+			}
+		}
+
+		item.ttl = time.Now().Add(time.Duration(ttl) * time.Second)
+		item.prev = nil
+	}
+
+	return nil
+}
+
+func CreateHttpClient(strategy upstream.ForwardStrategy, getUpstreams func() []upstream.Upstream) *http.Client {
 	dialer := &net.Dialer{
 		Timeout:   30 * time.Second,
 		KeepAlive: 30 * time.Second,
@@ -28,7 +83,7 @@ func createDoHClient(strategy IForwardStrategy, getUpstreams func() []Upstream) 
 	var mu sync.RWMutex
 
 	// this cache should only hold a few entries at most so don't worry about clearing expired entries
-	cache := make(map[string]*CacheItem)
+	cache := make(map[string]*cacheItem)
 	transport.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
 		upstreams := getUpstreams()
 		if len(upstreams) < 1 {
@@ -53,7 +108,7 @@ func createDoHClient(strategy IForwardStrategy, getUpstreams func() []Upstream) 
 			// another thread may have updated the cache while waiting
 			// for the lock so check again just in case
 			if _, ok := cache[host]; !ok {
-				item = &CacheItem{}
+				item = &cacheItem{}
 				item.cond = sync.NewCond(item.mu.RLocker())
 				cache[host] = item
 			}
@@ -120,7 +175,7 @@ func createDoHClient(strategy IForwardStrategy, getUpstreams func() []Upstream) 
 	}
 }
 
-func dohExchange(client *http.Client, server string, msg *dns.Msg) (*dns.Msg, error) {
+func Exchange(client *http.Client, server string, msg *dns.Msg) (*dns.Msg, error) {
 	reqbody, err := msg.Pack()
 	if err != nil {
 		return nil, fmt.Errorf("failed to pack doh message: %w", err)
@@ -157,35 +212,35 @@ func dohExchange(client *http.Client, server string, msg *dns.Msg) (*dns.Msg, er
 	return out, nil
 }
 
-func dohTestServer(hc *http.Client, server string) bool {
+func testServer(hc *http.Client, server string) bool {
 	msg := &dns.Msg{}
 	msg.SetQuestion("example.com.", dns.TypeANY)
-	_, err := dohExchange(hc, server, msg)
+	_, err := Exchange(hc, server, msg)
 	return err == nil
 }
 
-func dohValidateServer(hc *http.Client, server string) (string, error) {
+func ValidateServer(hc *http.Client, server string) (string, error) {
 	if u, err := url.Parse(server); err == nil {
 		// this is a valid url, try exchanging a message
-		if dohTestServer(hc, server) {
+		if testServer(hc, server) {
 			return server, nil
 		}
 
 		if u.Path == "" || u.Path == "/" {
 			// maybe it's missing the path, try adding /dns-query
 			u.Path = "/dns-query"
-			if dohTestServer(hc, u.String()) {
+			if testServer(hc, u.String()) {
 				return u.String(), nil
 			}
 		}
 	}
 
 	if !strings.HasPrefix(server, "http://") && !strings.HasPrefix(server, "https://") {
-		if dohTestServer(hc, "http://"+server) {
+		if testServer(hc, "http://"+server) {
 			return "http://" + server, nil
 		}
 
-		if dohTestServer(hc, "https://"+server) {
+		if testServer(hc, "https://"+server) {
 			return "https://" + server, nil
 		}
 
@@ -194,12 +249,12 @@ func dohValidateServer(hc *http.Client, server string) (string, error) {
 
 				// maybe it's missing the path, try adding /dns-query
 				u.Path = "/dns-query"
-				if dohTestServer(hc, u.String()) {
+				if testServer(hc, u.String()) {
 					return u.String(), nil
 				}
 
 				u.Scheme = "http"
-				if dohTestServer(hc, u.String()) {
+				if testServer(hc, u.String()) {
 					return u.String(), nil
 				}
 			}
