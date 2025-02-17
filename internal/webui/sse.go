@@ -9,12 +9,12 @@ import (
 	"time"
 )
 
-type SSEMessage struct {
+type sseMessage struct {
 	Event string
 	Data  string
 }
 
-func StartSSE(w http.ResponseWriter, msgChan <-chan SSEMessage) {
+func startSSE(w http.ResponseWriter, msgChan <-chan sseMessage) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
@@ -32,7 +32,7 @@ func StartSSE(w http.ResponseWriter, msgChan <-chan SSEMessage) {
 
 		t.Reset(30 * time.Second)
 
-		var msg SSEMessage
+		var msg sseMessage
 		select {
 		case m, ok := <-msgChan:
 			if !ok {

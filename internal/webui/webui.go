@@ -37,7 +37,7 @@ type Controller interface {
 }
 
 func RegisterWebUI(mux *http.ServeMux, c Controller) {
-	logsQueue := NewPubSub(c.LogChan())
+	logsQueue := newPubSub(c.LogChan())
 
 	mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(RootLayout(RootLayoutProps{
@@ -146,10 +146,10 @@ func RegisterWebUI(mux *http.ServeMux, c Controller) {
 			return
 		}
 
-		msgChan := make(chan SSEMessage, 1)
+		msgChan := make(chan sseMessage, 1)
 		go func() {
 			for entry := range logsQueue.Subscribe() {
-				msgChan <- SSEMessage{
+				msgChan <- sseMessage{
 					Event: "message",
 					Data: LogRow(LogRowProps{
 						entry: entry,
@@ -158,7 +158,7 @@ func RegisterWebUI(mux *http.ServeMux, c Controller) {
 			}
 		}()
 
-		StartSSE(w, msgChan)
+		startSSE(w, msgChan)
 	})
 
 	mux.HandleFunc("GET /settings", func(w http.ResponseWriter, r *http.Request) {

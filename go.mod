@@ -5,6 +5,7 @@ go 1.22.1
 require (
 	github.com/miekg/dns v1.1.62
 	github.com/patriciy/adblock v0.0.0-20201201143319-2c60183c9ccc
+	gopkg.in/yaml.v3 v3.0.1
 )
 
 require (

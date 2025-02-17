@@ -88,7 +88,7 @@ func (s *LinearStrategy) ForwardMessage(upstreams []Upstream, msg *dns.Msg) (*dn
 		if res, err := u.ForwardMessage(msg); err != nil {
 			lastErr = err
 			j = i
-		} else {
+		} else if res != nil {
 			return res, i, nil
 		}
 	}

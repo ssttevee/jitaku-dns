@@ -8,8 +8,50 @@ import (
 )
 
 type RewriteUpstream struct {
+	ConfigLines []string
+
 	V4 map[string][]net.IP
 	V6 map[string][]net.IP
+}
+
+func NewRewriteUpstream(lines []string) *RewriteUpstream {
+	up := &RewriteUpstream{
+		ConfigLines: lines,
+		V4:          make(map[string][]net.IP),
+		V6:          make(map[string][]net.IP),
+	}
+
+	for _, line := range up.ConfigLines {
+		halves := strings.SplitN(strings.TrimSpace(line), "#", 2)
+		parts := strings.Split(strings.TrimSpace(halves[0]), " ")
+
+		ip := net.ParseIP(parts[0])
+		if ip == nil {
+			continue
+		}
+
+		var name string
+		for _, part := range parts[1:] {
+			if part == "" {
+				continue
+			}
+
+			name = part
+			break
+		}
+
+		if v4 := ip.To4(); v4 != nil {
+			up.V4[name] = append(up.V4[name], v4)
+		} else {
+			up.V6[name] = append(up.V6[name], ip)
+		}
+	}
+
+	return up
+}
+
+func (c *RewriteUpstream) Empty() bool {
+	return len(c.V4) == 0 && len(c.V6) == 0
 }
 
 func (c *RewriteUpstream) String() string {

@@ -1,10 +1,10 @@
 package webui
 
-type PubSub[T any] struct {
+type pubsub[T any] struct {
 	subs map[chan T]struct{}
 }
 
-func NewPubSub[T any](ch <-chan T) *PubSub[T] {
+func newPubSub[T any](ch <-chan T) *pubsub[T] {
 	subs := make(map[chan T]struct{})
 	go func() {
 		for v := range ch {
@@ -18,12 +18,12 @@ func NewPubSub[T any](ch <-chan T) *PubSub[T] {
 		}
 	}()
 
-	return &PubSub[T]{
+	return &pubsub[T]{
 		subs: subs,
 	}
 }
 
-func (p *PubSub[T]) Subscribe() <-chan T {
+func (p *pubsub[T]) Subscribe() <-chan T {
 	ch := make(chan T, 1)
 	p.subs[ch] = struct{}{}
 	return ch

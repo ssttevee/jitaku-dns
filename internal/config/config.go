@@ -3,46 +3,56 @@ package config
 import (
 	"errors"
 	"fmt"
-	"log"
 	"net"
 	"net/http"
 	"net/url"
+	"strings"
+	"sync"
 	"time"
 
+	"github.com/miekg/dns"
 	"github.com/ssttevee/jitaku-dns/internal/dns/dohutil"
 	"github.com/ssttevee/jitaku-dns/internal/dns/upstream"
 	"github.com/ssttevee/jitaku-dns/internal/dns/upstream/doh"
 	"github.com/ssttevee/jitaku-dns/internal/dns/upstream/filter"
 	"github.com/ssttevee/jitaku-dns/internal/dns/upstream/pool"
 	"github.com/ssttevee/jitaku-dns/internal/dns/upstream/rewrite"
+	"gopkg.in/yaml.v3"
 )
 
-type FilterConfig struct {
-	Name     string `toml:"name"`
-	URL      string `toml:"url"`
-	Disabled bool   `toml:"disabled"`
-}
-
-type RewriteConfig struct {
-	IP   string
-	Name string
-}
-
 type UpstreamConfig struct {
-	Servers  []string                      `toml:"servers"`
-	Strategy *upstream.ForwardStrategyKind `toml:"strategy"`
+	Strategy *upstream.ForwardStrategyKind `yaml:"strategy,omitempty"`
+	Servers  []string                      `yaml:"servers,omitempty"`
 
-	Fallback  []string `toml:"fallback"`
-	Bootstrap []string `toml:"bootstrap"`
+	Fallback  []string `yaml:"fallback,omitempty"`
+	Bootstrap []string `yaml:"bootstrap,omitempty"`
 }
 
 type Config struct {
-	Upstream *UpstreamConfig `toml:"upstream"`
-	Filters  []FilterConfig  `toml:"filters"`
-	Rewrites []RewriteConfig `toml:"rewrites"`
+	Upstream *UpstreamConfig `yaml:"upstream,omitempty"`
+	Filters  []string        `yaml:"filters,omitempty"`
+	Rewrites []string        `yaml:"rewrites,omitempty"`
 }
 
-var ErrNoClient = errors.New("no http client")
+func Parse(data []byte) (*Config, error) {
+	var cfg Config
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
+		return nil, fmt.Errorf("failed to parse config: %w", err)
+	}
+
+	return &cfg, nil
+}
+
+func (c *Config) Serialize() []byte {
+	s, err := yaml.Marshal(c)
+	if err != nil {
+		panic(err)
+	}
+
+	return []byte(s)
+}
+
+var ErrMissingBootstrapServers = errors.New("bootstrap servers required for DoH")
 
 func serverToUpstream(hc *http.Client, server string) (upstream.Upstream, string, error) {
 	if u, _ := url.Parse(server); u != nil {
@@ -60,7 +70,7 @@ func serverToUpstream(hc *http.Client, server string) (upstream.Upstream, string
 
 		if u.Scheme == "https" || u.Scheme == "http" {
 			if hc == nil {
-				return nil, "", ErrNoClient
+				return nil, "", ErrMissingBootstrapServers
 			}
 
 			if validatedServer, _ := dohutil.ValidateServer(hc, server); validatedServer != "" {
@@ -100,13 +110,97 @@ func serverToUpstream(hc *http.Client, server string) (upstream.Upstream, string
 	return nil, "", fmt.Errorf("invalid server %s", server)
 }
 
-type ValidatedConfig struct {
-	Upstreams          [][]upstream.Upstream
-	Strategy           upstream.ForwardStrategy
-	BootstrapUpstreams []upstream.Upstream
+func serverToBootstrap(server string) (upstream.Upstream, string, error) {
+	upstream, formattedServer, err := serverToUpstream(nil, server)
+	if err != nil {
+		if errors.Is(err, ErrMissingBootstrapServers) {
+			return nil, "", fmt.Errorf("DoH server cannot be used for bootstrap: %s", server)
+		}
+
+		return nil, "", err
+	}
+
+	return upstream, formattedServer, nil
 }
 
-func (c *Config) ValidateConfig() (*ValidatedConfig, error) {
+func filterToUpstream(url string) (upstream.Upstream, string, error) {
+	f, err := filter.NewFilterUpstream(http.DefaultClient, url)
+	if err != nil {
+		return nil, "", err
+	}
+
+	return f, url, nil
+}
+
+type LazyUpstream struct {
+	server   string
+	initFunc func(server string) (upstream.Upstream, string, error)
+
+	once     sync.Once
+	initerr  error
+	upstream upstream.Upstream
+}
+
+func (l *LazyUpstream) doinit() {
+	l.once.Do(func() {
+		if !strings.HasPrefix(strings.TrimSpace(l.server), "#") {
+			l.upstream, l.server, l.initerr = l.initFunc(l.server)
+		}
+	})
+}
+
+func (l *LazyUpstream) ConfigLine() string {
+	return l.server
+}
+
+func (l *LazyUpstream) Inner() upstream.Upstream {
+	l.doinit()
+	return l.upstream
+}
+
+func (l *LazyUpstream) String() string {
+	if l.upstream != nil {
+		return l.upstream.String()
+	}
+
+	return l.server
+}
+
+func (l *LazyUpstream) ForwardMessage(msg *dns.Msg) (*dns.Msg, error) {
+	l.doinit()
+	if l.initerr != nil {
+		return nil, l.initerr
+	}
+
+	if l.upstream != nil {
+		return l.upstream.ForwardMessage(msg)
+	}
+
+	return nil, nil
+}
+
+func (l *LazyUpstream) Close() error {
+	l.doinit()
+	if l.upstream != nil {
+		defer func() {
+			l.upstream = nil
+			l.initerr = nil
+			l.once = sync.Once{}
+		}()
+
+		return l.upstream.Close()
+	}
+
+	return nil
+}
+
+type InitializedConfig struct {
+	Strategy           upstream.ForwardStrategy
+	BootstrapUpstreams []upstream.Upstream
+	Upstreams          [][]upstream.Upstream
+}
+
+func (c *Config) Initialize() (*InitializedConfig, error) {
 	var hc *http.Client
 
 	var strategy upstream.ForwardStrategy
@@ -122,16 +216,9 @@ func (c *Config) ValidateConfig() (*ValidatedConfig, error) {
 	if c.Upstream != nil {
 		bootstrap = make([]upstream.Upstream, len(c.Upstream.Bootstrap))
 		for i, server := range c.Upstream.Bootstrap {
-			log.Printf("INFO: checking bootstrap server %s", server)
-			if upstream, formattedServer, err := serverToUpstream(nil, server); err != nil {
-				if errors.Is(err, ErrNoClient) {
-					return nil, fmt.Errorf("doh server cannot be used for bootstrap: %s", server)
-				}
-
-				return nil, fmt.Errorf("invalid bootstrap server %s: %w", server, err)
-			} else {
-				c.Upstream.Bootstrap[i] = formattedServer
-				bootstrap[i] = upstream
+			bootstrap[i] = &LazyUpstream{
+				server:   server,
+				initFunc: serverToBootstrap,
 			}
 		}
 
@@ -143,25 +230,23 @@ func (c *Config) ValidateConfig() (*ValidatedConfig, error) {
 			hc.Timeout = 5 * time.Second
 		}
 
+		initFunc := func(url string) (upstream.Upstream, string, error) {
+			return serverToUpstream(hc, url)
+		}
+
 		upstreams = make([]upstream.Upstream, len(c.Upstream.Servers))
 		for i, server := range c.Upstream.Servers {
-			log.Printf("INFO: checking upstream server %s", server)
-			if upstream, formattedServer, err := serverToUpstream(hc, server); err != nil {
-				return nil, fmt.Errorf("invalid server %s: %w", server, err)
-			} else {
-				c.Upstream.Servers[i] = formattedServer
-				upstreams[i] = upstream
+			upstreams[i] = &LazyUpstream{
+				server:   server,
+				initFunc: initFunc,
 			}
 		}
 
 		fallback = make([]upstream.Upstream, len(c.Upstream.Fallback))
 		for i, server := range c.Upstream.Fallback {
-			log.Printf("INFO: checking fallback server %s", server)
-			if upstream, formattedServer, err := serverToUpstream(hc, server); err != nil {
-				return nil, fmt.Errorf("invalid fallback server %s: %w", server, err)
-			} else {
-				c.Upstream.Fallback[i] = formattedServer
-				fallback[i] = upstream
+			fallback[i] = &LazyUpstream{
+				server:   server,
+				initFunc: initFunc,
 			}
 		}
 	}
@@ -170,45 +255,20 @@ func (c *Config) ValidateConfig() (*ValidatedConfig, error) {
 		hc = http.DefaultClient
 	}
 
-	var filters []upstream.Upstream
-	for _, filterConfig := range c.Filters {
-		if filterConfig.Disabled {
-			continue
-		}
-
-		log.Printf("INFO: fetching filter from %s", filterConfig.URL)
-		f, err := filter.FetchAndParseFilter(hc, filterConfig.URL)
-		if err != nil {
-			return nil, fmt.Errorf("failed to fetch filter %s: %w", filterConfig.URL, err)
-		}
-
-		filters = append(filters, &filter.FilterUpstream{
-			Filter: f,
-		})
-	}
-
-	rewrites4 := make(map[string][]net.IP)
-	rewrites6 := make(map[string][]net.IP)
-	for _, rewriteConfig := range c.Rewrites {
-		ip := net.ParseIP(rewriteConfig.IP)
-		if ip == nil {
-			return nil, fmt.Errorf("invalid IP address %s", rewriteConfig.IP)
-		}
-
-		if v4 := ip.To4(); v4 != nil {
-			rewrites4[rewriteConfig.Name] = append(rewrites4[rewriteConfig.Name], v4)
-		} else {
-			rewrites6[rewriteConfig.Name] = append(rewrites6[rewriteConfig.Name], ip)
+	filters := make([]upstream.Upstream, len(c.Filters))
+	for i, filterConfig := range c.Filters {
+		filters[i] = &LazyUpstream{
+			server:   filterConfig,
+			initFunc: filterToUpstream,
 		}
 	}
+
+	rewriteUpstream := rewrite.NewRewriteUpstream(c.Rewrites)
 
 	var finalUpstreams [][]upstream.Upstream
-	if len(rewrites4) > 0 || len(rewrites6) > 0 {
+	if !rewriteUpstream.Empty() {
 		finalUpstreams = append(finalUpstreams, []upstream.Upstream{
-			&rewrite.RewriteUpstream{
-				V4: rewrites4,
-				V6: rewrites6,
-			},
+			rewriteUpstream,
 		})
 	}
 
@@ -224,40 +284,45 @@ func (c *Config) ValidateConfig() (*ValidatedConfig, error) {
 		finalUpstreams = append(finalUpstreams, fallback)
 	}
 
-	return &ValidatedConfig{
+	return &InitializedConfig{
 		Upstreams:          finalUpstreams,
 		Strategy:           strategy,
 		BootstrapUpstreams: bootstrap,
 	}, nil
 }
 
+var dnsIPs = []string{
+	"# google",
+	"1.1.1.1",
+	"1.0.0.1",
+	"2606:4700:4700::1111",
+	"2606:4700:4700::1001",
+
+	"# google",
+	"8.8.8.8",
+	"8.8.4.4",
+	"2001:4860:4860::8888",
+	"2001:4860:4860::8844",
+
+	"# china",
+	"# 1.2.4.8",
+	"# 210.2.4.8",
+	"# 240c::6666",
+	"# 240c::6644",
+}
+
 var DefaultConfig = &Config{
 	Upstream: &UpstreamConfig{
 		Servers: []string{
 			"https://cloudflare-dns.com/dns-query",
+			"https://dns.google/dns-query",
 		},
-		Fallback: []string{
-			"1.1.1.1",
-			"1.0.0.1",
-			"8.8.8.8",
-			"8.8.4.4",
-		},
-		Bootstrap: []string{
-			"1.1.1.1",
-			"1.0.0.1",
-			"8.8.8.8",
-			"8.8.4.4",
-		},
+		Fallback:  dnsIPs,
+		Bootstrap: dnsIPs,
 	},
-	Filters: []FilterConfig{
-		{
-			Name: "AdGuard DNS filter",
-			URL:  "https://adguardteam.github.io/HostlistsRegistry/assets/filter_1.txt",
-		},
-		{
-			Name:     "AdAway Default Blocklist",
-			URL:      "https://adguardteam.github.io/HostlistsRegistry/assets/filter_2.txt",
-			Disabled: true,
-		},
+	Filters: []string{
+		"https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts",
+		"# https://adguardteam.github.io/HostlistsRegistry/assets/filter_1.txt",
+		"# https://adguardteam.github.io/HostlistsRegistry/assets/filter_2.txt",
 	},
 }

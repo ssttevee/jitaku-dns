@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -9,28 +10,52 @@ import (
 	"os"
 	"os/signal"
 	"runtime"
-	"sync"
 	"syscall"
 	"time"
 
 	"github.com/miekg/dns"
 	"github.com/ssttevee/jitaku-dns/internal"
 	"github.com/ssttevee/jitaku-dns/internal/config"
-	"github.com/ssttevee/jitaku-dns/internal/dns/dohutil"
 	"github.com/ssttevee/jitaku-dns/internal/dns/upstream"
 	"github.com/ssttevee/jitaku-dns/internal/webui"
 )
 
 type Jitaku struct {
-	*config.ValidatedConfig
+	*config.InitializedConfig
 
-	httpClientOnce sync.Once
-	httpClient     *http.Client
-	logChan        chan *internal.LogEntry
+	logChan chan *internal.LogEntry
+}
+
+func NewJitakuFromConfigPath(configPath string) (*Jitaku, error) {
+	var cfg *config.Config
+	if configPath == "" {
+		cfg = config.DefaultConfig
+	} else if data, err := os.ReadFile(configPath); errors.Is(err, os.ErrNotExist) {
+		log.Println("INFO: config file not found")
+		log.Println("INFO: writing default config")
+		cfg = config.DefaultConfig
+		if err := os.MkdirAll(configPath, 0700); err == nil {
+			if err := os.WriteFile(configPath, config.DefaultConfig.Serialize(), 0600); err != nil && errors.Is(err, os.ErrPermission) {
+				log.Printf("WARN: Failed to write default config file to disk: %v", err)
+			}
+		}
+	} else {
+		if err != nil {
+			return nil, fmt.Errorf("failed to read config file: %w", err)
+		}
+
+		if cfg, err = config.Parse(data); err != nil {
+			return nil, fmt.Errorf("failed to parse config: %w", err)
+		}
+	}
+
+	fmt.Println(string(cfg.Serialize()))
+
+	return NewJitaku(cfg)
 }
 
 func NewJitaku(config *config.Config) (*Jitaku, error) {
-	validated, err := config.ValidateConfig()
+	validated, err := config.Initialize()
 	if err != nil {
 		return nil, fmt.Errorf("failed to validate config: %w", err)
 	}
@@ -38,10 +63,10 @@ func NewJitaku(config *config.Config) (*Jitaku, error) {
 	return NewJitakuValidated(validated), nil
 }
 
-func NewJitakuValidated(validated *config.ValidatedConfig) *Jitaku {
+func NewJitakuValidated(validated *config.InitializedConfig) *Jitaku {
 	return &Jitaku{
-		logChan:         make(chan *internal.LogEntry, 1),
-		ValidatedConfig: validated,
+		logChan:           make(chan *internal.LogEntry, 1),
+		InitializedConfig: validated,
 	}
 }
 
@@ -62,22 +87,6 @@ func (h *Jitaku) MakeWebUIHandler() http.Handler {
 	webui.RegisterWebUI(mux, h)
 
 	return mux
-}
-
-func (s *Jitaku) initHttpClient() {
-	strat := upstream.ForwardStrategyKindLinear
-	if s.Strategy != nil {
-		strat = s.Strategy.Enum()
-	}
-
-	s.httpClient = dohutil.CreateHttpClient(strat.New(), func() []upstream.Upstream {
-		return s.BootstrapUpstreams
-	})
-}
-
-func (s *Jitaku) getHttpClient() *http.Client {
-	s.httpClientOnce.Do(s.initHttpClient)
-	return s.httpClient
 }
 
 func (c *Jitaku) ProcessMessage(r *dns.Msg) (*internal.MessageResult, error) {
@@ -154,19 +163,21 @@ func main() {
 	host := flag.String("host", "0.0.0.0", "address to listen on (defaults to \"0.0.0.0\")")
 	port := flag.Int("port", 53, "port to listen on")
 	webui := flag.Bool("webui", false, "whether to run the web UI")
-	webuiHost := flag.String("webui-host", "127.0.0.1", "address to listen on, empty for all (defaults to 127.0.0.1)")
+	webuiHost := flag.String("webui-host", "127.0.0.1", "address to listen on (defaults to 127.0.0.1)")
 	webuiPort := flag.Int("webui-port", 8808, "port to run the web UI on")
+	configPath := flag.String("config", config.DefaultConfigPath, "config file path")
 	flag.Parse()
 
-	log.Println("INFO: validating config")
+	if *configPath == "" {
+		log.Println("INFO: loading default config")
+	} else {
+		log.Println("INFO: loading config from", *configPath)
+	}
 
-	start := time.Now()
-	h, err := NewJitaku(config.DefaultConfig)
+	h, err := NewJitakuFromConfigPath(*configPath)
 	if err != nil {
 		log.Fatalf("ERROR: Failed to create scrubbr: %v", err)
 	}
-
-	log.Printf("INFO: config validated in %s", time.Now().Sub(start))
 
 	// TODO: Add support for multiple addresses
 	addrs := []string{fmt.Sprintf("%s:%d", *host, *port)}

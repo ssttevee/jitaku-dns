@@ -41,7 +41,7 @@ func (r *MessageResult) Detail() string {
 
 	switch u := r.Upstream.(type) {
 	case *filter.FilterUpstream:
-		return u.Filter.Name()
+		return u.String()
 	default:
 	}
 

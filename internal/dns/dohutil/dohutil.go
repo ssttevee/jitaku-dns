@@ -28,9 +28,9 @@ type cacheItem struct {
 	ttl  time.Time
 }
 
-func (item *cacheItem) Update(host string, strategy upstream.ForwardStrategy, upstreams []upstream.Upstream) error {
+func (item *cacheItem) Update(host string, strategy upstream.ForwardStrategy, upstreams []upstream.Upstream) (bool, error) {
 	if !item.mu.TryLock() {
-		return nil
+		return true, nil
 	}
 
 	defer item.mu.Unlock()
@@ -43,18 +43,24 @@ func (item *cacheItem) Update(host string, strategy upstream.ForwardStrategy, up
 			msg.SetQuestion(dns.Fqdn(host), t)
 			res, _, err := strategy.ForwardMessage(upstreams, &msg)
 			if err != nil {
-				return fmt.Errorf("failed to forward message: %w", err)
+				return false, fmt.Errorf("failed to forward message: %w", err)
 			}
 
-			for _, rec := range res.Answer {
-				if a, ok := rec.(*dns.A); ok {
-					ips = append(ips, a.A)
-					ttls = append(ttls, a.Hdr.Ttl)
-				} else if aaaa, ok := rec.(*dns.AAAA); ok {
-					ips = append(ips, aaaa.AAAA)
-					ttls = append(ttls, aaaa.Hdr.Ttl)
+			if res != nil {
+				for _, rec := range res.Answer {
+					if a, ok := rec.(*dns.A); ok {
+						ips = append(ips, a.A)
+						ttls = append(ttls, a.Hdr.Ttl)
+					} else if aaaa, ok := rec.(*dns.AAAA); ok {
+						ips = append(ips, aaaa.AAAA)
+						ttls = append(ttls, aaaa.Hdr.Ttl)
+					}
 				}
 			}
+		}
+
+		if len(ips) == 0 || len(ttls) == 0 {
+			return false, nil
 		}
 
 		item.ips = ips
@@ -69,7 +75,7 @@ func (item *cacheItem) Update(host string, strategy upstream.ForwardStrategy, up
 		item.prev = nil
 	}
 
-	return nil
+	return true, nil
 }
 
 func CreateHttpClient(strategy upstream.ForwardStrategy, getUpstreams func() []upstream.Upstream) *http.Client {
@@ -118,11 +124,16 @@ func CreateHttpClient(strategy upstream.ForwardStrategy, getUpstreams func() []u
 		item.mu.RLock()
 		for time.Now().After(item.ttl) {
 			item.mu.RUnlock()
-			if err := item.Update(host, strategy, upstreams); err != nil {
+
+			ok, err := item.Update(host, strategy, upstreams)
+			if err != nil {
 				return nil, fmt.Errorf("failed to update cache: %w", err)
 			}
 
 			item.mu.RLock()
+			if !ok {
+				break
+			}
 		}
 
 		// make a copy of the IPs to avoid holding the lock while dialing
