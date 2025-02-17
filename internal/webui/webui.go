@@ -8,6 +8,7 @@ import (
 
 	"github.com/miekg/dns"
 	"github.com/ssttevee/jitaku-dns/internal"
+	"github.com/ssttevee/jitaku-dns/internal/config"
 	"github.com/ssttevee/jitaku-dns/internal/dns/upstream"
 )
 
@@ -33,7 +34,16 @@ var digTypes = []dns.Type{
 type Controller interface {
 	LogChan() <-chan *internal.LogEntry
 	ProcessMessage(msg *dns.Msg) (*internal.MessageResult, error)
-	ForwardStrategy() upstream.ForwardStrategy
+	GetConfig() *config.Config
+	SetConfig(*config.Config) error
+}
+
+func Max(x, y int) int {
+	if x > y {
+		return x
+	}
+
+	return y
 }
 
 func RegisterWebUI(mux *http.ServeMux, c Controller) {
@@ -162,9 +172,11 @@ func RegisterWebUI(mux *http.ServeMux, c Controller) {
 	})
 
 	mux.HandleFunc("GET /settings", func(w http.ResponseWriter, r *http.Request) {
+		cfg := c.GetConfig()
+
 		currentStrategy := upstream.DefaultStrategy.Enum()
-		if s := c.ForwardStrategy(); s != nil {
-			currentStrategy = s.Enum()
+		if s := cfg.Upstream.Strategy; s != nil {
+			currentStrategy = *s
 		}
 
 		var radioOptions string
@@ -193,35 +205,58 @@ func RegisterWebUI(mux *http.ServeMux, c Controller) {
 <h3>DNS</h3>
 <hr/>
 <div class="container my-5">
-<div class="row">
-	<div class="col">
+<div class="row gy-4">
+	<div class="col-6">
 		<div class="card">
 			<div class="card-body">
 				<div class="mb-3">
 					<label for="servers-text-area" class="form-label">
-						<h6>Servers</h6>
-						<p class="my-0 small">Enter one server address per line.</p>
+						<h6>Upstream Servers</h6>
+						<p class="my-0 small text-secondary">Enter one server address per line. (Lines starting with <code>#</code> are ignored)</p>
 					</label>
-					<textarea class="form-control" id="servers-text-area" rows="3"></textarea>
+					<textarea class="form-control" id="servers-text-area" rows="`+strconv.FormatInt(int64(Max(3, len(cfg.Upstream.Servers))), 10)+`">`+strings.Join(cfg.Upstream.Servers, "\n")+`</textarea>
 				</div>
-				<fieldset>
+				<fieldset class="mb-3">
 					<legend><h6>Strategy</h6></legend>
-					<p class="mt-0 small">How to select upstream server.</p>
+					<p class="mt-0 small text-secondary">How to select upstream server. (Lines starting with <code>#</code> are ignored)</p>
 					<div class="container">
 						<div class="row">`+radioOptions+`</div>
 					</div>
 				</fieldset>
+				<div class="mb-3">
+					<label for="bootstrap-text-area" class="form-label">
+						<h6>Bootstrap Servers</h6>
+						<p class="my-0 small text-secondary">Enter one server address per line. (Lines starting with <code>#</code> are ignored)</p>
+					</label>
+					<textarea class="form-control" id="bootstrap-text-area" rows="`+strconv.FormatInt(int64(Max(3, len(cfg.Upstream.Bootstrap))), 10)+`">`+strings.Join(cfg.Upstream.Bootstrap, "\n")+`</textarea>
+				</div>
+				<div>
+					<label for="fallback-text-area" class="form-label">
+						<h6>Fallback Servers</h6>
+						<p class="my-0 small text-secondary">Enter one server address per line. (Lines starting with <code>#</code> are ignored)</p>
+					</label>
+					<textarea class="form-control" id="fallback-text-area" rows="`+strconv.FormatInt(int64(Max(3, len(cfg.Upstream.Fallback))), 10)+`">`+strings.Join(cfg.Upstream.Fallback, "\n")+`</textarea>
+				</div>
 			</div>
 		</div>
 	</div>
-	<div class="col">
+	<div class="col-6">
+		<div class="card mb-4">
+			<div class="card-body">
+				<label for="filters-text-area" class="form-label">
+					<h6>Filters</h6>
+					<p class="my-0 small text-secondary">Enter one url per line. ABP and hosts file links are supported.</p>
+				</label>
+				<textarea class="form-control" id="filters-text-area" rows="`+strconv.FormatInt(int64(Max(3, len(cfg.Filters))), 10)+`">`+strings.Join(cfg.Filters, "\n")+`</textarea>
+			</div>
+		</div>
 		<div class="card">
 			<div class="card-body">
 				<label for="rewrites-text-area" class="form-label">
 					<h6>Rewrites</h6>
-					<p class="my-0 small">Enter in the format of <code>/etc/hosts</code>.</p>
+					<p class="my-0 small text-secondary">Enter in the format of <code>/etc/hosts</code>. (Lines starting with <code>#</code> are ignored)</p>
 				</label>
-				<textarea class="form-control" id="rewrites-text-area" rows="3"></textarea>
+				<textarea class="form-control" id="rewrites-text-area" rows="`+strconv.FormatInt(int64(Max(3, len(cfg.Rewrites))), 10)+`">`+strings.Join(cfg.Rewrites, "\n")+`</textarea>
 			</div>
 		</div>
 	</div>

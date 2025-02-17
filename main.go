@@ -16,7 +16,6 @@ import (
 	"github.com/miekg/dns"
 	"github.com/ssttevee/jitaku-dns/internal"
 	"github.com/ssttevee/jitaku-dns/internal/config"
-	"github.com/ssttevee/jitaku-dns/internal/dns/upstream"
 	"github.com/ssttevee/jitaku-dns/internal/webui"
 )
 
@@ -51,35 +50,18 @@ func NewJitakuFromConfigPath(configPath string) (*Jitaku, error) {
 
 	fmt.Println(string(cfg.Serialize()))
 
-	return NewJitaku(cfg)
+	return NewJitaku(cfg), nil
 }
 
-func NewJitaku(config *config.Config) (*Jitaku, error) {
-	validated, err := config.Initialize()
-	if err != nil {
-		return nil, fmt.Errorf("failed to validate config: %w", err)
-	}
-
-	return NewJitakuValidated(validated), nil
-}
-
-func NewJitakuValidated(validated *config.InitializedConfig) *Jitaku {
+func NewJitaku(config *config.Config) *Jitaku {
 	return &Jitaku{
 		logChan:           make(chan *internal.LogEntry, 1),
-		InitializedConfig: validated,
+		InitializedConfig: config.Initialize(),
 	}
 }
 
 func (j *Jitaku) LogChan() <-chan *internal.LogEntry {
 	return j.logChan
-}
-
-func (j *Jitaku) ForwardStrategy() upstream.ForwardStrategy {
-	if j.Strategy == nil {
-		return upstream.DefaultStrategy
-	}
-
-	return j.Strategy
 }
 
 func (h *Jitaku) MakeWebUIHandler() http.Handler {
@@ -89,45 +71,19 @@ func (h *Jitaku) MakeWebUIHandler() http.Handler {
 	return mux
 }
 
-func (c *Jitaku) ProcessMessage(r *dns.Msg) (*internal.MessageResult, error) {
-	start := time.Now()
+func (h *Jitaku) GetConfig() *config.Config {
+	return h.InitializedConfig.Config()
+}
 
-	var res *dns.Msg
-	var lastErr error
-	var server upstream.Upstream
-	for i := 0; i < len(c.Upstreams) && res == nil; {
-		if c.Strategy == nil {
-			c.Strategy = upstream.DefaultStrategy
-		}
-
-		if len(c.Upstreams[i]) < 1 {
-			continue
-		}
-
-		msg, j, err := c.Strategy.ForwardMessage(c.Upstreams[i], r)
-		server = c.Upstreams[i][j]
-		if err != nil {
-			lastErr = fmt.Errorf("Failed to forward message to upstream %s: %v", server, err)
-		} else {
-			res = msg
-		}
-
-		i++
+func (h *Jitaku) SetConfig(c *config.Config) error {
+	initialized := c.Initialize()
+	if err := initialized.Validate(); err != nil {
+		return err
 	}
 
-	if res == nil {
-		// log.Println("No upstreams available")
+	h.InitializedConfig = initialized
 
-		res = &dns.Msg{}
-		res.SetRcode(r, dns.RcodeServerFailure)
-		res.Extra = append(res.Extra, dns.TypeToRR[dns.TypeTXT]())
-	}
-
-	return &internal.MessageResult{
-		Response: res,
-		Elapsed:  time.Now().Sub(start),
-		Upstream: server,
-	}, lastErr
+	return nil
 }
 
 func (c *Jitaku) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
