@@ -182,12 +182,35 @@ func RegisterWebUI(mux *http.ServeMux, c Controller) {
 			yaml = string(cfg.Serialize())
 		}
 
-		w.Write([]byte(SettingsPage(SettingsPageProps{
-			configpath: c.GetConfigPath(),
-			pathname:   r.URL.Path,
-			yaml:       yaml,
-			cfg:        cfg,
-		})))
+		w.Write([]byte(RootLayout(
+			RootLayoutProps{
+				title:    "Settings",
+				pathname: r.URL.Path,
+				stylesheets: []string{
+					"https://cdn.jsdelivr.net/npm/prismjs@1.29.0/themes/prism.min.css",
+					"https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/line-numbers/prism-line-numbers.min.css",
+					"https://cdn.jsdelivr.net/gh/WebCoder49/code-input@2.4.0/code-input.min.css",
+					"https://cdn.jsdelivr.net/gh/WebCoder49/code-input@2.4.0/plugins/prism-line-numbers.min.css",
+				},
+				scripts: []string{
+					"https://cdn.jsdelivr.net/npm/prismjs@1.29.0/prism.min.js",
+					"https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-ignore.min.js",
+					"https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-yaml.min.js",
+					"https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/line-numbers/prism-line-numbers.min.js",
+					"https://cdn.jsdelivr.net/gh/WebCoder49/code-input@2.4.0/code-input.min.js",
+					"https://cdn.jsdelivr.net/gh/WebCoder49/code-input@2.4.0/plugins/indent.min.js",
+					"https://cdn.jsdelivr.net/gh/WebCoder49/code-input@2.4.0/plugins/indent.min.js",
+				},
+				scriptSnippets: []string{
+					`codeInput.registerTemplate("syntax-highlighted", codeInput.templates.prism(Prism, []));`,
+				},
+			},
+			SettingsContent(SettingsContentProps{
+				configpath: c.GetConfigPath(),
+				yaml:       yaml,
+				cfg:        cfg,
+			}),
+		)))
 	})
 
 	mux.HandleFunc("POST /settings", func(w http.ResponseWriter, r *http.Request) {
@@ -202,6 +225,16 @@ func RegisterWebUI(mux *http.ServeMux, c Controller) {
 		q, err := url.ParseQuery(string(body))
 		if err != nil {
 			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+
+		if r.Header.Get("Hx-Request") != "true" {
+			path := r.URL.Path
+			if r.URL.RawQuery != "" {
+				path += "?" + r.URL.RawQuery
+			}
+
+			http.Redirect(w, r, path, http.StatusSeeOther)
 			return
 		}
 
@@ -254,39 +287,41 @@ func RegisterWebUI(mux *http.ServeMux, c Controller) {
 			cfgerr = c.SetConfig(cfg)
 		}
 
-		w.Write([]byte(SettingsPage(SettingsPageProps{
+		var msg string
+		if cfgerr != nil {
+			msg = cfgerr.Error()
+		} else {
+			msg = "Config saved successfully."
+		}
+
+		w.Write([]byte(SettingsContent(SettingsContentProps{
 			configpath: c.GetConfigPath(),
-			pathname:   r.URL.Path,
 			yaml:       yaml,
 			cfg:        cfg,
-			err:        cfgerr,
+			msg:        msg,
 		})))
 	})
 }
 
-type SettingsPageProps struct {
+type SettingsContentProps struct {
 	configpath string
-	pathname   string
 	yaml       string
 
 	cfg *config.Config
-	err error
+	msg string
 }
 
-func SettingsPage(props SettingsPageProps) string {
+func SettingsContent(props SettingsContentProps) string {
 	var errorMessage string
-	if props.err != nil {
+	if props.msg != "" {
 		errorMessage = `
 <div class="row gy-4">
-<pre>` + props.err.Error() + `</pre>
+<pre>` + props.msg + `</pre>
 </div>`
 	}
 
-	highlightlang := "ignore"
-
 	var body string
 	if props.yaml != "" {
-		highlightlang = "yaml"
 		body = `
 <code-input class="flex-grow-1" language="yaml" placeholder="" name="yaml">` + props.yaml + `</code-input>
 `
@@ -374,9 +409,12 @@ func SettingsPage(props SettingsPageProps) string {
 	}
 
 	var yamlbtn string
+	var url string
 	if props.yaml != "" {
+		url = "/settings?yaml=1"
 		yamlbtn = `<a href="/settings" class="btn btn-secondary">Config Mode</a>`
 	} else {
+		url = "/settings"
 		yamlbtn = `<a href="/settings?yaml=1" class="btn btn-secondary">YAML Mode</a>`
 	}
 
@@ -387,44 +425,21 @@ func SettingsPage(props SettingsPageProps) string {
 		headersubtext = "Changes will be written to disk if server has write permissions. (Config path: <code>" + props.configpath + "</code>)"
 	}
 
-	return RootLayout(
-		RootLayoutProps{
-			title:    "Settings",
-			pathname: props.pathname,
-			stylesheets: []string{
-				"https://cdn.jsdelivr.net/npm/prismjs@1.29.0/themes/prism.min.css",
-				"https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/line-numbers/prism-line-numbers.min.css",
-				"https://cdn.jsdelivr.net/gh/WebCoder49/code-input@2.4.0/code-input.min.css",
-				"https://cdn.jsdelivr.net/gh/WebCoder49/code-input@2.4.0/plugins/prism-line-numbers.min.css",
-			},
-			scripts: []string{
-				"https://cdn.jsdelivr.net/npm/prismjs@1.29.0/prism.min.js",
-				"https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-" + highlightlang + ".min.js",
-				"https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/line-numbers/prism-line-numbers.min.js",
-				"https://cdn.jsdelivr.net/gh/WebCoder49/code-input@2.4.0/code-input.min.js",
-				"https://cdn.jsdelivr.net/gh/WebCoder49/code-input@2.4.0/plugins/indent.min.js",
-				"https://cdn.jsdelivr.net/gh/WebCoder49/code-input@2.4.0/plugins/indent.min.js",
-			},
-			scriptSnippets: []string{
-				`codeInput.registerTemplate("syntax-highlighted", codeInput.templates.prism(Prism, []));`,
-			},
-		},
-		`
-<form method="post" class="flex-grow-1 d-flex flex-column">
+	return `
+<form hx-post="` + url + `" hx-target="body" class="flex-grow-1 d-flex flex-column">
 <div class="d-flex justify-content-between">
 	<h1>Settings</h1>
 	<div>
-		`+yamlbtn+`
+		` + yamlbtn + `
 		<button class="btn btn-primary">Save</button>
 	</div>
 </div>
-<p class="text-secondary">`+headersubtext+`</p>
+<p class="text-secondary">` + headersubtext + `</p>
 <div class="my-5 line-numbers flex-grow-1 d-flex flex-column">
-`+errorMessage+body+`
+` + errorMessage + body + `
 </div>
 </form>
-`,
-	)
+`
 }
 
 type DigResultProps struct {
