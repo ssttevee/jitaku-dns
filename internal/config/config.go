@@ -104,7 +104,7 @@ func serverToUpstream(hc *http.Client, server string) (upstream.Upstream, string
 
 	if net.ParseIP(server) != nil {
 		return &pool.ConnPoolUpstream{
-			Addr: server + ":53",
+			Addr: net.JoinHostPort(server, "53"),
 		}, server, nil
 	}
 

@@ -22,7 +22,21 @@ import (
 type Jitaku struct {
 	*config.InitializedConfig
 
+	configPath string
+
 	logChan chan *internal.LogEntry
+}
+
+func writeConfig(cfg *config.Config, configPath string) error {
+	if err := os.MkdirAll(configPath, 0700); err != nil {
+		return err
+	}
+
+	if err := os.WriteFile(configPath, cfg.Serialize(), 0600); err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func NewJitakuFromConfigPath(configPath string) (*Jitaku, error) {
@@ -31,12 +45,11 @@ func NewJitakuFromConfigPath(configPath string) (*Jitaku, error) {
 		cfg = config.DefaultConfig
 	} else if data, err := os.ReadFile(configPath); errors.Is(err, os.ErrNotExist) {
 		log.Println("INFO: config file not found")
-		log.Println("INFO: writing default config")
 		cfg = config.DefaultConfig
-		if err := os.MkdirAll(configPath, 0700); err == nil {
-			if err := os.WriteFile(configPath, config.DefaultConfig.Serialize(), 0600); err != nil && errors.Is(err, os.ErrPermission) {
-				log.Printf("WARN: Failed to write default config file to disk: %v", err)
-			}
+		if err := writeConfig(cfg, configPath); err != nil && !errors.Is(err, os.ErrPermission) {
+			log.Printf("WARN: failed to write default config to disk: %v", err)
+		} else if err == nil {
+			log.Println("INFO: wrote default config to disk")
 		}
 	} else {
 		if err != nil {
@@ -48,7 +61,7 @@ func NewJitakuFromConfigPath(configPath string) (*Jitaku, error) {
 		}
 	}
 
-	fmt.Println(string(cfg.Serialize()))
+	os.Stderr.WriteString(string(cfg.Serialize()))
 
 	return NewJitaku(cfg), nil
 }
@@ -75,10 +88,26 @@ func (h *Jitaku) GetConfig() *config.Config {
 	return h.InitializedConfig.Config()
 }
 
+func (h *Jitaku) GetConfigPath() string {
+	return h.configPath
+}
+
 func (h *Jitaku) SetConfig(c *config.Config) error {
 	initialized := c.Initialize()
 	if err := initialized.Validate(); err != nil {
 		return err
+	}
+
+	if h.configPath != "" {
+		if err := writeConfig(c, h.configPath); err != nil {
+			if !errors.Is(err, os.ErrPermission) {
+				return fmt.Errorf("failed to write config file: %w", err)
+			}
+
+			log.Printf("WARN: failed to write config to disk: %v", err)
+		} else {
+			log.Println("INFO: wrote config to disk")
+		}
 	}
 
 	h.InitializedConfig = initialized
@@ -134,6 +163,8 @@ func main() {
 	if err != nil {
 		log.Fatalf("ERROR: Failed to create scrubbr: %v", err)
 	}
+
+	h.configPath = *configPath
 
 	// TODO: Add support for multiple addresses
 	addrs := []string{fmt.Sprintf("%s:%d", *host, *port)}

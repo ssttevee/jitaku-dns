@@ -2,7 +2,9 @@ package webui
 
 import (
 	"html"
+	"io"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 
@@ -36,6 +38,7 @@ type Controller interface {
 	ProcessMessage(msg *dns.Msg) (*internal.MessageResult, error)
 	GetConfig() *config.Config
 	SetConfig(*config.Config) error
+	GetConfigPath() string
 }
 
 func Max(x, y int) int {
@@ -174,8 +177,123 @@ func RegisterWebUI(mux *http.ServeMux, c Controller) {
 	mux.HandleFunc("GET /settings", func(w http.ResponseWriter, r *http.Request) {
 		cfg := c.GetConfig()
 
+		var yaml string
+		if r.URL.Query().Get("yaml") == "1" {
+			yaml = string(cfg.Serialize())
+		}
+
+		w.Write([]byte(SettingsPage(SettingsPageProps{
+			configpath: c.GetConfigPath(),
+			pathname:   r.URL.Path,
+			yaml:       yaml,
+			cfg:        cfg,
+		})))
+	})
+
+	mux.HandleFunc("POST /settings", func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+
+		q, err := url.ParseQuery(string(body))
+		if err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+
+		yamlmode := r.URL.Query().Get("yaml") == "1"
+		var yaml string
+		var cfg *config.Config
+		var cfgerr error
+		if yamlmode {
+			yaml = q.Get("yaml")
+			if yaml == "" {
+				path := r.URL.Path
+				if r.URL.RawQuery != "" {
+					path += "?" + r.URL.RawQuery
+				}
+
+				http.Redirect(w, r, path, http.StatusSeeOther)
+				return
+			}
+
+			config, err := config.Parse([]byte(yaml))
+			if err != nil {
+				cfgerr = err
+			} else {
+				cfg = config
+			}
+		} else {
+			cfg = &config.Config{}
+			if bootstraps := q.Get("bootstraps"); bootstraps != "" {
+				cfg.Upstream.Bootstrap = strings.Split(bootstraps, "\n")
+			}
+
+			if servers := q.Get("servers"); servers != "" {
+				cfg.Upstream.Servers = strings.Split(servers, "\n")
+			}
+
+			if fallbacks := q.Get("fallbacks"); fallbacks != "" {
+				cfg.Upstream.Fallback = strings.Split(fallbacks, "\n")
+			}
+
+			if filters := q.Get("filters"); filters != "" {
+				cfg.Filters = strings.Split(filters, "\n")
+			}
+
+			if strategy := upstream.ForwardStrategyKind(q.Get("strategy")); strategy.Valid() {
+				cfg.Upstream.Strategy = &strategy
+			}
+		}
+
+		if cfg != nil && cfgerr == nil {
+			cfgerr = c.SetConfig(cfg)
+		}
+
+		w.Write([]byte(SettingsPage(SettingsPageProps{
+			configpath: c.GetConfigPath(),
+			pathname:   r.URL.Path,
+			yaml:       yaml,
+			cfg:        cfg,
+			err:        cfgerr,
+		})))
+	})
+}
+
+type SettingsPageProps struct {
+	configpath string
+	pathname   string
+	yaml       string
+
+	cfg *config.Config
+	err error
+}
+
+func SettingsPage(props SettingsPageProps) string {
+	var errorMessage string
+	if props.err != nil {
+		errorMessage = `
+<div class="row gy-4">
+<pre>` + props.err.Error() + `</pre>
+</div>`
+	}
+
+	highlightlang := "ignore"
+
+	var body string
+	if props.yaml != "" {
+		highlightlang = "yaml"
+		body = `
+<code-input class="flex-grow-1" language="yaml" placeholder="" name="yaml">` + props.yaml + `</code-input>
+`
+	} else if props.cfg != nil {
+
 		currentStrategy := upstream.DefaultStrategy.Enum()
-		if s := cfg.Upstream.Strategy; s != nil {
+		if s := props.cfg.Upstream.Strategy; s != nil {
 			currentStrategy = *s
 		}
 
@@ -187,85 +305,126 @@ func RegisterWebUI(mux *http.ServeMux, c Controller) {
 			}
 
 			radioOptions += `
-<div class="col form-check">
-	<input class="form-check-input" type="radio" name="strategy" id="strategy-` + string(strategy) + `" value="` + string(strategy) + `"` + attrs + `>
-	<label class="form-check-label text-nowrap" for="strategy-` + string(strategy) + `">` + string(strategy.String()) + `</label>
-</div>
-`
+	<div class="col form-check">
+			<input class="form-check-input" type="radio" name="strategy" id="strategy-` + string(strategy) + `" value="` + string(strategy) + `"` + attrs + `>
+			<label class="form-check-label text-nowrap" for="strategy-` + string(strategy) + `">` + string(strategy.String()) + `</label>
+	</div>
+	`
 		}
 
-		w.Write([]byte(RootLayout(
-			RootLayoutProps{
-				title:    "Settings",
-				pathname: r.URL.Path,
+		body = `
+<div class="row">
+<div class="col-6">
+	<div class="card">
+		<div class="card-body">
+			<div class="mb-3">
+				<label for="servers-text-area" class="form-label">
+					<h6>Upstream Servers</h6>
+					<p class="my-0 small text-secondary">Enter one server address per line. (Lines starting with <code>#</code> are ignored)</p>
+				</label>
+				<code-input language="ignore" placeholder="" id="servers-text-area" name="servers">` + strings.Join(props.cfg.Upstream.Servers, "\n") + `</code-input>
+			</div>
+			<fieldset class="mb-3">
+				<legend><h6>Strategy</h6></legend>
+				<p class="mt-0 small text-secondary">How to select upstream server. (Lines starting with <code>#</code> are ignored)</p>
+				<div class="container">
+					<div class="row">` + radioOptions + `</div>
+				</div>
+			</fieldset>
+			<div class="mb-3">
+				<label for="bootstrap-text-area" class="form-label">
+					<h6>Bootstrap Servers</h6>
+					<p class="my-0 small text-secondary">Enter one server address per line. (Lines starting with <code>#</code> are ignored)</p>
+				</label>
+				<code-input language="ignore" placeholder="" id="bootstrap-text-area" name="bootstraps">` + strings.Join(props.cfg.Upstream.Bootstrap, "\n") + `</code-input>
+			</div>
+			<div>
+				<label for="fallback-text-area" class="form-label">
+					<h6>Fallback Servers</h6>
+					<p class="my-0 small text-secondary">Enter one server address per line. (Lines starting with <code>#</code> are ignored)</p>
+				</label>
+				<code-input language="ignore" placeholder="" id="fallback-text-area" name="fallbacks">` + strings.Join(props.cfg.Upstream.Fallback, "\n") + `</code-input>
+			</div>
+		</div>
+	</div>
+</div>
+<div class="col-6">
+	<div class="card mb-4">
+		<div class="card-body">
+			<label for="filters-text-area" class="form-label">
+				<h6>Filters</h6>
+				<p class="my-0 small text-secondary">Enter one url per line. ABP and hosts file links are supported.</p>
+			</label>
+			<code-input language="ignore" placeholder="" id="filters-text-area" name="filters">` + strings.Join(props.cfg.Filters, "\n") + `</code-input>
+		</div>
+	</div>
+	<div class="card">
+		<div class="card-body">
+			<label for="rewrites-text-area" class="form-label">
+				<h6>Rewrites</h6>
+				<p class="my-0 small text-secondary">Enter in the format of <code>/etc/hosts</code>. (Lines starting with <code>#</code> are ignored)</p>
+			</label>
+			<code-input language="ignore" placeholder="" id="rewrites-text-area" name="rewrites">` + strings.Join(props.cfg.Rewrites, "\n") + `</code-input>
+		</div>
+	</div>
+</div>
+</div>`
+	} else {
+		body = `config is nil (this should not happen)`
+	}
+
+	var yamlbtn string
+	if props.yaml != "" {
+		yamlbtn = `<a href="/settings" class="btn btn-secondary">Config Mode</a>`
+	} else {
+		yamlbtn = `<a href="/settings?yaml=1" class="btn btn-secondary">YAML Mode</a>`
+	}
+
+	var headersubtext string
+	if props.configpath == "" {
+		headersubtext = "Config path not set. Changes will not persist after restart."
+	} else {
+		headersubtext = "Changes will be written to disk if server has write permissions. (Config path: <code>" + props.configpath + "</code>)"
+	}
+
+	return RootLayout(
+		RootLayoutProps{
+			title:    "Settings",
+			pathname: props.pathname,
+			stylesheets: []string{
+				"https://cdn.jsdelivr.net/npm/prismjs@1.29.0/themes/prism.min.css",
+				"https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/line-numbers/prism-line-numbers.min.css",
+				"https://cdn.jsdelivr.net/gh/WebCoder49/code-input@2.4.0/code-input.min.css",
+				"https://cdn.jsdelivr.net/gh/WebCoder49/code-input@2.4.0/plugins/prism-line-numbers.min.css",
 			},
-			"<h1>Settings</h1>",
-			`
-<div class="container my-5">
-<h3>DNS</h3>
-<hr/>
-<div class="container my-5">
-<div class="row gy-4">
-	<div class="col-6">
-		<div class="card">
-			<div class="card-body">
-				<div class="mb-3">
-					<label for="servers-text-area" class="form-label">
-						<h6>Upstream Servers</h6>
-						<p class="my-0 small text-secondary">Enter one server address per line. (Lines starting with <code>#</code> are ignored)</p>
-					</label>
-					<textarea class="form-control" id="servers-text-area" rows="`+strconv.FormatInt(int64(Max(3, len(cfg.Upstream.Servers))), 10)+`">`+strings.Join(cfg.Upstream.Servers, "\n")+`</textarea>
-				</div>
-				<fieldset class="mb-3">
-					<legend><h6>Strategy</h6></legend>
-					<p class="mt-0 small text-secondary">How to select upstream server. (Lines starting with <code>#</code> are ignored)</p>
-					<div class="container">
-						<div class="row">`+radioOptions+`</div>
-					</div>
-				</fieldset>
-				<div class="mb-3">
-					<label for="bootstrap-text-area" class="form-label">
-						<h6>Bootstrap Servers</h6>
-						<p class="my-0 small text-secondary">Enter one server address per line. (Lines starting with <code>#</code> are ignored)</p>
-					</label>
-					<textarea class="form-control" id="bootstrap-text-area" rows="`+strconv.FormatInt(int64(Max(3, len(cfg.Upstream.Bootstrap))), 10)+`">`+strings.Join(cfg.Upstream.Bootstrap, "\n")+`</textarea>
-				</div>
-				<div>
-					<label for="fallback-text-area" class="form-label">
-						<h6>Fallback Servers</h6>
-						<p class="my-0 small text-secondary">Enter one server address per line. (Lines starting with <code>#</code> are ignored)</p>
-					</label>
-					<textarea class="form-control" id="fallback-text-area" rows="`+strconv.FormatInt(int64(Max(3, len(cfg.Upstream.Fallback))), 10)+`">`+strings.Join(cfg.Upstream.Fallback, "\n")+`</textarea>
-				</div>
-			</div>
-		</div>
-	</div>
-	<div class="col-6">
-		<div class="card mb-4">
-			<div class="card-body">
-				<label for="filters-text-area" class="form-label">
-					<h6>Filters</h6>
-					<p class="my-0 small text-secondary">Enter one url per line. ABP and hosts file links are supported.</p>
-				</label>
-				<textarea class="form-control" id="filters-text-area" rows="`+strconv.FormatInt(int64(Max(3, len(cfg.Filters))), 10)+`">`+strings.Join(cfg.Filters, "\n")+`</textarea>
-			</div>
-		</div>
-		<div class="card">
-			<div class="card-body">
-				<label for="rewrites-text-area" class="form-label">
-					<h6>Rewrites</h6>
-					<p class="my-0 small text-secondary">Enter in the format of <code>/etc/hosts</code>. (Lines starting with <code>#</code> are ignored)</p>
-				</label>
-				<textarea class="form-control" id="rewrites-text-area" rows="`+strconv.FormatInt(int64(Max(3, len(cfg.Rewrites))), 10)+`">`+strings.Join(cfg.Rewrites, "\n")+`</textarea>
-			</div>
-		</div>
+			scripts: []string{
+				"https://cdn.jsdelivr.net/npm/prismjs@1.29.0/prism.min.js",
+				"https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-" + highlightlang + ".min.js",
+				"https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/line-numbers/prism-line-numbers.min.js",
+				"https://cdn.jsdelivr.net/gh/WebCoder49/code-input@2.4.0/code-input.min.js",
+				"https://cdn.jsdelivr.net/gh/WebCoder49/code-input@2.4.0/plugins/indent.min.js",
+				"https://cdn.jsdelivr.net/gh/WebCoder49/code-input@2.4.0/plugins/indent.min.js",
+			},
+			scriptSnippets: []string{
+				`codeInput.registerTemplate("syntax-highlighted", codeInput.templates.prism(Prism, []));`,
+			},
+		},
+		`
+<form method="post" class="flex-grow-1 d-flex flex-column">
+<div class="d-flex justify-content-between">
+	<h1>Settings</h1>
+	<div>
+		`+yamlbtn+`
+		<button class="btn btn-primary">Save</button>
 	</div>
 </div>
+<p class="text-secondary">`+headersubtext+`</p>
+<div class="my-5 line-numbers flex-grow-1 d-flex flex-column">
+`+errorMessage+body+`
 </div>
-</div>
+</form>
 `,
-		)))
-	})
+	)
 }
 
 type DigResultProps struct {
@@ -313,9 +472,12 @@ func LogRow(props LogRowProps) string {
 }
 
 type RootLayoutProps struct {
-	title    string
-	pathname string
-	darkmode bool
+	title          string
+	pathname       string
+	darkmode       bool
+	stylesheets    []string
+	scripts        []string
+	scriptSnippets []string
 }
 
 func RootLayout(props RootLayoutProps, children ...string) string {
@@ -365,6 +527,26 @@ func RootLayout(props RootLayoutProps, children ...string) string {
 		navItemsHtml += `<li class="nav-item"><a class="nav-link` + extraClasses + `"` + extraAttrs + ` href="` + item.Path + `">` + item.Name + `</a></li>`
 	}
 
+	var stylesheets string
+	for _, href := range append([]string{
+		"https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css",
+	}, props.stylesheets...) {
+		stylesheets += `<link rel="stylesheet" href="` + html.EscapeString(href) + `">`
+	}
+
+	var scripts string
+	for _, src := range append([]string{
+		"https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js",
+		"https://cdn.jsdelivr.net/npm/htmx.org@2.0.4/dist/htmx.min.js",
+		"https://cdn.jsdelivr.net/npm/htmx-ext-sse@2.2.2/sse.js",
+	}, props.scripts...) {
+		scripts += `<script src="` + html.EscapeString(src) + `"></script>`
+	}
+
+	for _, js := range props.scriptSnippets {
+		scripts += `<script>` + js + `</script>`
+	}
+
 	return `
 <!DOCTYPE html>
 <html lang="en"` + rootAttrs + `>
@@ -373,25 +555,23 @@ func RootLayout(props RootLayoutProps, children ...string) string {
 	<meta charset="utf-8">
 	<meta name="viewport" content="width=device-width, initial-scale=1">
 	<title>` + titlePrefix + `JitakuDNS</title>
-	<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-QWTKZyjpPEjISv5WaRU9OFeRpok6YctnYmDr5pNlyT2bRjXh0JMhjY6hW+ALEwIH" crossorigin="anonymous">
+	` + stylesheets + `
 </head>
 
-<body>
+<body class="min-vh-100 d-flex flex-column">
 <nav class="navbar navbar-expand-lg bg-body-tertiary">
-  <div class="container-fluid">
-    <a class="navbar-brand" href="#">JitakuDNS</a>
-    <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarSupportedContent" aria-controls="navbarSupportedContent" aria-expanded="false" aria-label="Toggle navigation">
-      <span class="navbar-toggler-icon"></span>
-    </button>
-    <div class="collapse navbar-collapse" id="navbarSupportedContent">
-      <ul class="navbar-nav me-auto mb-2 mb-lg-0">` + navItemsHtml + `</ul>
-    </div>
-  </div>
+	<div class="container-fluid">
+		<a class="navbar-brand" href="#">JitakuDNS</a>
+		<button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarSupportedContent" aria-controls="navbarSupportedContent" aria-expanded="false" aria-label="Toggle navigation">
+			<span class="navbar-toggler-icon"></span>
+		</button>
+		<div class="collapse navbar-collapse" id="navbarSupportedContent">
+			<ul class="navbar-nav me-auto mb-2 mb-lg-0">` + navItemsHtml + `</ul>
+		</div>
+	</div>
 </nav>
-<div class="container my-5">` + strings.Join(children, "") + `</div>
-<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js" integrity="sha384-YvpcrYf0tY3lHB60NNkmXc5s9fDVZLESaAA55NDzOxhy9GkcIdslK1eN7N6jIeHz" crossorigin="anonymous"></script>
-<script src="https://cdn.jsdelivr.net/npm/htmx.org@2.0.4/dist/htmx.min.js" integrity="sha256-4gndpcgjVHnzFm3vx3UOHbzVpcGAi3eS/C5nM3aPtEc=" crossorigin="anonymous"></script>
-<script src="https://cdn.jsdelivr.net/npm/htmx-ext-sse@2.2.2/sse.js" integrity="sha256-g+ym+gYR/isL8XALQkuIteztOO9Ejvl2Ci6gj7yHVhE=" crossorigin="anonymous"></script>
+<div class="container mt-5 flex-grow-1 d-flex flex-column">` + strings.Join(children, "") + `</div>
+` + scripts + `
 </body>
 
 </html>
