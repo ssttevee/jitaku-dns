@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path"
 	"runtime"
 	"syscall"
 	"time"
@@ -28,7 +29,7 @@ type Jitaku struct {
 }
 
 func writeConfig(cfg *config.Config, configPath string) error {
-	if err := os.MkdirAll(configPath, 0700); err != nil {
+	if err := os.MkdirAll(path.Dir(configPath), 0700); err != nil {
 		return err
 	}
 
