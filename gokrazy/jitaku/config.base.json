@@ -1,0 +1,25 @@
+{
+    "Hostname": "jitaku",
+    "Update": {
+        "HTTPPassword": "",
+        "NoPassword": true
+    },
+    "Environment": [
+        "GOOS=linux"
+    ],
+    "Packages": [
+        "github.com/gokrazy/fbstatus",
+        "github.com/gokrazy/mkfs",
+        "github.com/ssttevee/jitaku-dns"
+    ],
+    "PackageConfig": {
+        "github.com/ssttevee/jitaku-dns": {
+            "CommandLineFlags": [
+                "-webui",
+                "-webui-host=0.0.0.0"
+            ],
+            "WaitForClock": true
+        }
+    },
+    "SerialConsole": "disabled"
+}
