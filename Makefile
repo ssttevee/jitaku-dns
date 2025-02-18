@@ -19,7 +19,7 @@ WATCH_ENVS := GOKRAZY_HOSTNAME GOKRAZY_PASSWORD
 
 .NOTPARALLEL: $(IMAGE_TARGETS)
 
-all: $(IMAGE_TARGETS)
+all: $(addsuffix .gz,$(IMAGE_TARGETS))
 
 _updateenvs:
 	for env in $(WATCH_ENVS); do f=$(ENVS_DIR)/$$env; v=$$(eval echo \$$$$env); if [[ "$$v" != "$$(cat $$f 2> /dev/null)" ]]; then mkdir -p $(ENVS_DIR); echo $$v > $$f; fi; done
@@ -48,5 +48,8 @@ clean:
 $(ARTIFACT_DIR)/%.img: $(BUILD_CONFIGS_DIR)/%.jq $(GOK_BASE_CONFIG_FILE) $(shell find . -type f -name '*.go') $(shell find $(GOK_INSTANCE_DIR) -type f -name '*.mod') $(shell find $(GOK_INSTANCE_DIR) -type f -name '*.sum')
 	jq -f $< $(GOK_BASE_CONFIG_FILE) > $(GOK_CONFIG_FILE)
 	mkdir -p $(ARTIFACT_DIR)
-	$(GOK) overwrite --root $@
+	$(GOK) overwrite --full $@ --target_storage_bytes 1258299392
 	rm $(GOK_CONFIG_FILE)
+
+$(ARTIFACT_DIR)/%.img.gz: $(ARTIFACT_DIR)/%.img
+	gzip -9 -c $< > $@
