@@ -8,24 +8,26 @@ Jitaku (自宅) is Japanese for "one's home".
 
 - Ad block filter list support
 - Hosts file style rewrites
+- DNS over HTTPS (DoH) upstream support
 - Single fully-static binary
 - File-based configuration
 - Minimalistic web interface
 - Web-based dig tool for debugging
 - Web-based configuration editor
+- Web-based pi image updater
 
 ## Non-Features
 
-- No webui authentication
 - No DHCP server
 
 ## To Do List
 
+- Optional basic auth for web interface
 - Pretty graphs on the dashboard
-- Ship Raspberry Pi appliance images (using gokrazy)
-  - Stretch goal: one-click update pi image from web interface (also downgrading)
-- Speed up adblock filter list processing
+- One-click update pi image from web interface (also downgrading)
 - Cache DNS responses
+- Embed web interface dependencies into binary
+- Automatically update ad block lists
 
 ## Building
 
