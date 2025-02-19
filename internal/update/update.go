@@ -7,27 +7,13 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
-	"io/ioutil"
 	"log"
 	"net/http"
-	"os"
-	"strings"
 
 	"github.com/diskfs/go-diskfs/partition"
 	"github.com/gokrazy/updater"
+	"github.com/ssttevee/jitaku-dns/internal/gokrazyutil"
 )
-
-func readConfigFile(fileName string) (string, error) {
-	str, err := ioutil.ReadFile("/perm/" + fileName)
-	if err != nil {
-		str, err = ioutil.ReadFile("/etc/" + fileName)
-	}
-	if err != nil && os.IsNotExist(err) {
-		str, err = ioutil.ReadFile("/" + fileName)
-	}
-
-	return strings.TrimSpace(string(str)), err
-}
 
 type fileStub struct {
 	r *bufio.Reader
@@ -85,21 +71,12 @@ func UpdateFromGZippedImage(r io.Reader) error {
 		return fmt.Errorf("expected 4 partitions, got %d", len(parts))
 	}
 
-	httpPassword, err := readConfigFile("gokr-pw.txt")
+	url, err := gokrazyutil.DashboardURL()
 	if err != nil {
-		return fmt.Errorf("failed to read http password: %w", err)
+		return fmt.Errorf("failed to get dashboard url: %w", err)
 	}
 
-	log.Printf("DEBUG: found http password %q", httpPassword)
-
-	httpPort, err := readConfigFile("http-port.txt")
-	if err != nil {
-		return fmt.Errorf("failed to read http port: %w", err)
-	}
-
-	log.Printf("DEBUG: found http port %q", httpPort)
-
-	target, err := updater.NewTarget(fmt.Sprintf("http://gokrazy:%s@127.0.0.1:%s/", httpPassword, httpPort), http.DefaultClient)
+	target, err := updater.NewTarget(url, http.DefaultClient)
 	if err != nil {
 		return fmt.Errorf("failed to create updater target: %w", err)
 	}

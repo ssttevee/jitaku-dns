@@ -4,7 +4,9 @@ package webui
 
 import (
 	"net/http"
+	"net/url"
 
+	"github.com/ssttevee/jitaku-dns/internal/gokrazyutil"
 	"github.com/ssttevee/jitaku-dns/internal/update"
 )
 
@@ -16,10 +18,35 @@ var gokrazyNavItems = []navItem{
 }
 
 func registerGoKrazyRoutes(mux *http.ServeMux) {
+	u, _ := gokrazyutil.DashboardURL()
+	parsed, _ := url.Parse(u)
+
+	if parsed != nil {
+		p, _ := parsed.User.Password()
+		if p != "" {
+			port := parsed.Port()
+			if port == "80" {
+				port = ""
+			} else {
+				port = ":" + port
+			}
+
+			gokrazyNavItems = append(gokrazyNavItems, navItem{
+				Name: "gokrazy",
+				Path: u,
+				DynamicPath: func(r *http.Request) string {
+					urlcopy := &*parsed
+					urlcopy.Host = r.Host + port
+					return urlcopy.String()
+				},
+			})
+		}
+	}
+
 	mux.HandleFunc("GET /update", func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(RootLayout(
 			RootLayoutProps{
-				pathname: r.URL.Path,
+				req: r,
 			},
 			`
 <h1>Update</h1>

@@ -60,7 +60,7 @@ func RegisterWebUI(mux *http.ServeMux, c Controller) {
 
 	mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(RootLayout(RootLayoutProps{
-			pathname: r.URL.Path,
+			req: r,
 		}, "<h1>Dashboard</h1>")))
 	})
 
@@ -110,7 +110,7 @@ func RegisterWebUI(mux *http.ServeMux, c Controller) {
 
 		w.Write([]byte(RootLayout(
 			RootLayoutProps{
-				pathname: r.URL.Path,
+				req: r,
 			},
 			`
 <h1>Dig</h1>
@@ -143,8 +143,8 @@ func RegisterWebUI(mux *http.ServeMux, c Controller) {
 		if r.Header.Get("Accept") != "text/event-stream" {
 			w.Write([]byte(RootLayout(
 				RootLayoutProps{
-					title:    "Logs",
-					pathname: r.URL.Path,
+					title: "Logs",
+					req:   r,
 				},
 				`
 <h1>Logs</h1>
@@ -190,8 +190,8 @@ func RegisterWebUI(mux *http.ServeMux, c Controller) {
 
 		w.Write([]byte(RootLayout(
 			RootLayoutProps{
-				title:    "Settings",
-				pathname: r.URL.Path,
+				req:   r,
+				title: "Settings",
 				stylesheets: []string{
 					"https://cdn.jsdelivr.net/npm/prismjs@1.29.0/themes/prism.min.css",
 					"https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/line-numbers/prism-line-numbers.min.css",
@@ -506,8 +506,8 @@ func LogRow(props LogRowProps) string {
 }
 
 type RootLayoutProps struct {
+	req            *http.Request
 	title          string
-	pathname       string
 	darkmode       bool
 	stylesheets    []string
 	scripts        []string
@@ -515,8 +515,9 @@ type RootLayoutProps struct {
 }
 
 type navItem struct {
-	Name string
-	Path string
+	Name        string
+	Path        string
+	DynamicPath func(r *http.Request) string
 }
 
 func RootLayout(props RootLayoutProps, children ...string) string {
@@ -551,14 +552,22 @@ func RootLayout(props RootLayoutProps, children ...string) string {
 
 	var navItemsHtml string
 	for _, item := range navItems {
+		path := item.Path
+		if item.DynamicPath != nil {
+			dp := item.DynamicPath(props.req)
+			if dp != "" {
+				path = dp
+			}
+		}
+
 		var extraClasses string
 		var extraAttrs string
-		if item.Path == props.pathname {
+		if path == props.req.URL.Path {
 			extraClasses = " active"
 			extraAttrs = ` aria-current="page"`
 		}
 
-		navItemsHtml += `<li class="nav-item"><a class="nav-link` + extraClasses + `"` + extraAttrs + ` href="` + item.Path + `">` + item.Name + `</a></li>`
+		navItemsHtml += `<li class="nav-item"><a class="nav-link` + extraClasses + `"` + extraAttrs + ` href="` + path + `">` + item.Name + `</a></li>`
 	}
 
 	var stylesheets string
