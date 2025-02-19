@@ -13,6 +13,8 @@ BUILD_CONFIGS := $(basename $(notdir $(shell find $(BUILD_CONFIGS_DIR) -type f -
 IMAGE_BASENAMES := $(addprefix $(ARTIFACT_DIR)/,$(BUILD_CONFIGS))
 IMAGE_TARGETS := $(addsuffix .img,$(IMAGE_BASENAMES))
 
+GO_SRC_DEPS := $(shell find . -type f -name '*.go') $(shell find $(GOK_INSTANCE_DIR) -type f -name '*.mod') $(shell find $(GOK_INSTANCE_DIR) -type f -name '*.sum')
+
 DEV_TARGET ?= rpi-64
 WATCH_ENVS := GOKRAZY_HOSTNAME GOKRAZY_PASSWORD
 
@@ -20,7 +22,7 @@ WATCH_ENVS := GOKRAZY_HOSTNAME GOKRAZY_PASSWORD
 
 .NOTPARALLEL: $(IMAGE_TARGETS) $(IMAGE_PART_TARGETS)
 
-all: $(addsuffix .gz,$(IMAGE_TARGETS))
+all: $(ARTIFACT_DIR)/jitaku $(addsuffix .gz,$(IMAGE_TARGETS))
 
 dev: $(ARTIFACT_DIR)/dev.img.gz
 
@@ -48,14 +50,14 @@ overwrite: $(GOK_CONFIG_FILE)
 clean:
 	rm -rf $(ARTIFACT_DIR) $(ENVS_DIR) $(GOK_CONFIG_FILE)
 
-$(ARTIFACT_DIR)/dev.img: $(GOK_CONFIG_FILE) $(shell find . -type f -name '*.go') $(shell find $(GOK_INSTANCE_DIR) -type f -name '*.mod') $(shell find $(GOK_INSTANCE_DIR) -type f -name '*.sum')
+$(ARTIFACT_DIR)/dev.img: $(GOK_CONFIG_FILE) $(GO_SRC_DEPS)
 	mkdir -p $(ARTIFACT_DIR)
 	$(GOK) overwrite --full $@ --target_storage_bytes 1258299392
 
 $(ARTIFACT_DIR)/dev.img.gz: $(ARTIFACT_DIR)/dev.img
 	gzip -9 -c $< > $@
 
-$(ARTIFACT_DIR)/%.img: $(BUILD_CONFIGS_DIR)/%.jq $(GOK_BASE_CONFIG_FILE) $(shell find . -type f -name '*.go') $(shell find $(GOK_INSTANCE_DIR) -type f -name '*.mod') $(shell find $(GOK_INSTANCE_DIR) -type f -name '*.sum')
+$(ARTIFACT_DIR)/%.img: $(BUILD_CONFIGS_DIR)/%.jq $(GOK_BASE_CONFIG_FILE) $(GO_SRC_DEPS)
 	jq -f $< $(GOK_BASE_CONFIG_FILE) > $(GOK_CONFIG_FILE)
 	mkdir -p $(ARTIFACT_DIR)
 	$(GOK) overwrite --full $@ --target_storage_bytes 1258299392
@@ -63,3 +65,6 @@ $(ARTIFACT_DIR)/%.img: $(BUILD_CONFIGS_DIR)/%.jq $(GOK_BASE_CONFIG_FILE) $(shell
 
 $(ARTIFACT_DIR)/%.img.gz: $(ARTIFACT_DIR)/%.img
 	gzip -9 -c $< > $@
+
+$(ARTIFACT_DIR)/jitaku: $(GO_SRC_DEPS)
+	go build -o $@ .
