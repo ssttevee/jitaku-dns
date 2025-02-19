@@ -301,6 +301,8 @@ func RegisterWebUI(mux *http.ServeMux, c Controller) {
 			msg:        msg,
 		})))
 	})
+
+	registerGoKrazyRoutes(mux)
 }
 
 type SettingsContentProps struct {
@@ -349,7 +351,7 @@ func SettingsContent(props SettingsContentProps) string {
 
 		body = `
 <div class="row">
-<div class="col-6">
+<div class="col col-lg-6">
 	<div class="card">
 		<div class="card-body">
 			<div class="mb-3">
@@ -383,7 +385,7 @@ func SettingsContent(props SettingsContentProps) string {
 		</div>
 	</div>
 </div>
-<div class="col-6">
+<div class="col col-lg-6">
 	<div class="card mb-4">
 		<div class="card-body">
 			<label for="filters-text-area" class="form-label">
@@ -495,6 +497,11 @@ type RootLayoutProps struct {
 	scriptSnippets []string
 }
 
+type navItem struct {
+	Name string
+	Path string
+}
+
 func RootLayout(props RootLayoutProps, children ...string) string {
 	titlePrefix := props.title
 	if titlePrefix != "" {
@@ -506,12 +513,7 @@ func RootLayout(props RootLayoutProps, children ...string) string {
 		rootAttrs = ` data-bs-theme="dark"`
 	}
 
-	type NavItem struct {
-		Name string
-		Path string
-	}
-
-	navItems := []NavItem{
+	navItems := append([]navItem{
 		{
 			Name: "Dashboard",
 			Path: "/",
@@ -528,7 +530,7 @@ func RootLayout(props RootLayoutProps, children ...string) string {
 			Name: "Settings",
 			Path: "/settings",
 		},
-	}
+	}, gokrazyNavItems...)
 
 	var navItemsHtml string
 	for _, item := range navItems {

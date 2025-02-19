@@ -1,6 +1,7 @@
 {
     "Hostname": "jitaku",
     "Update": {
+        "HTTPPort": "8080",
         "HTTPPassword": "",
         "NoPassword": true
     },
@@ -16,6 +17,7 @@
         "github.com/ssttevee/jitaku-dns": {
             "CommandLineFlags": [
                 "-webui",
+                "-webui-port=80",
                 "-webui-host=0.0.0.0"
             ],
             "WaitForClock": true
