@@ -428,7 +428,7 @@ func SettingsContent(props SettingsContentProps) string {
 	}
 
 	return `
-<form hx-post="` + url + `" hx-target="body" class="flex-grow-1 d-flex flex-column">
+<form hx-post="` + url + `" hx-swap="outerHTML" class="flex-grow-1 d-flex flex-column" hx-on--after-settle="` + html.EscapeString(`document.querySelectorAll("code-input").forEach((elem) => {elem.connectedCallback();elem.attributeChangedCallback("template", "syntax-highlighted", "syntax-highlighted")})`) + `">
 <div class="d-flex justify-content-between">
 	<h1>Settings</h1>
 	<div>
