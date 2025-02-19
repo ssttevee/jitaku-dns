@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/miekg/dns"
-	"github.com/patriciy/adblock/adblock"
 )
 
 type FilterUpstream struct {
@@ -112,31 +111,6 @@ func (f *HostsFilter) ShouldBlock(name string) (bool, error) {
 	return ok, nil
 }
 
-type ABPFilter struct {
-	matcher *adblock.RuleMatcher
-	count   int
-}
-
-func (f *ABPFilter) RuleCount() int {
-	return f.count
-}
-
-func (f *ABPFilter) ShouldBlock(name string) (bool, error) {
-	name = dns.Fqdn(name)
-
-	ok, mode, err := f.matcher.Match(&adblock.Request{
-		URL: fmt.Sprintf("https://%s/", name[0:len(name)-1]),
-	})
-	if err != nil {
-		return false, err
-	}
-	if ok && mode == adblock.Included {
-		return true, nil
-	}
-
-	return false, nil
-}
-
 func SplitHostsFileLine(line string) (string, string) {
 	halves := strings.SplitN(strings.TrimSpace(line), "#", 2)
 	parts := strings.Split(strings.TrimSpace(halves[0]), " ")
@@ -183,30 +157,45 @@ func parseHostsFileFilter(ctx context.Context, r io.Reader) (Filter, error) {
 }
 
 func parseABPFilter(ctx context.Context, r io.Reader) (Filter, error) {
-	rules, err := adblock.ParseRules(r)
-	if err != nil {
-		return nil, err
-	}
+	hosts := make(map[string]struct{})
 
-	matcher := adblock.NewMatcher()
-	for i, rule := range rules {
+	var skipped int
+	scanner := bufio.NewScanner(r)
+	for scanner.Scan() {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
 
-		if err := matcher.AddRule(rule, i); err != nil {
-			return nil, fmt.Errorf("failed to add rule: %v", err)
+		line := strings.TrimSpace(scanner.Text())
+		if len(line) == 0 || strings.HasPrefix(line, "!") || strings.HasPrefix(line, "#") {
+			continue
+		}
+
+		if strings.HasPrefix(line, "||") && strings.HasSuffix(line, "^") {
+			name := strings.TrimSpace(line[2 : len(line)-1])
+			if _, ok := hosts[name]; !ok {
+				hosts[name] = struct{}{}
+			}
+		} else {
+			skipped += 1
 		}
 	}
 
-	return &ABPFilter{
-		matcher: matcher,
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+
+	log.Printf("INFO: skipped %d unsupported ABP rules", skipped)
+
+	return &HostsFilter{
+		hosts: hosts,
 	}, nil
 }
 
 func parseFilter(ctx context.Context, r io.Reader) (Filter, error) {
 	buffered := bufio.NewReader(r)
 	head, err := buffered.Peek(buffered.Size())
+
 	var pos int
 	for (err == nil || err == io.EOF) && pos < len(head) {
 		n, token, _ := bufio.ScanLines(head[pos:], err == io.EOF)
@@ -228,9 +217,8 @@ func parseFilter(ctx context.Context, r io.Reader) (Filter, error) {
 				return parseHostsFileFilter(ctx, buffered)
 			}
 
-			rule, _ := adblock.ParseRule(line)
-			if rule != nil {
-				// finish parsing the rest of the file as an ABP filter file«
+			if strings.HasPrefix(line, "||") && strings.HasSuffix(line, "^") {
+				// finish parsing the rest of the file as an ABP filter file
 				log.Printf("DEBUG: found ad block plus filter: %s", line)
 				buffered.Discard(pos)
 				return parseABPFilter(ctx, buffered)
