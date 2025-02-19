@@ -1,6 +1,7 @@
 package pool
 
 import (
+	"context"
 	"fmt"
 	"sync"
 
@@ -98,7 +99,7 @@ func (c *ConnPoolUpstream) Close() error {
 	return nil
 }
 
-func (c *ConnPoolUpstream) ForwardMessage(msg *dns.Msg) (*dns.Msg, error) {
+func (c *ConnPoolUpstream) ForwardMessage(ctx context.Context, msg *dns.Msg) (*dns.Msg, error) {
 	conn, err := c.getConn()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get conn: %w", err)

@@ -41,7 +41,7 @@ func (item *cacheItem) Update(host string, strategy upstream.ForwardStrategy, up
 		for _, t := range []uint16{dns.TypeA, dns.TypeAAAA} {
 			var msg dns.Msg
 			msg.SetQuestion(dns.Fqdn(host), t)
-			res, _, err := strategy.ForwardMessage(upstreams, &msg)
+			res, _, err := strategy.ForwardMessage(context.Background(), upstreams, &msg)
 			if err != nil {
 				return false, fmt.Errorf("failed to forward message: %w", err)
 			}
@@ -186,7 +186,7 @@ func CreateHttpClient(strategy upstream.ForwardStrategy, getUpstreams func() []u
 	}
 }
 
-func Exchange(client *http.Client, server string, msg *dns.Msg) (*dns.Msg, error) {
+func Exchange(ctx context.Context, client *http.Client, server string, msg *dns.Msg) (*dns.Msg, error) {
 	reqbody, err := msg.Pack()
 	if err != nil {
 		return nil, fmt.Errorf("failed to pack doh message: %w", err)
@@ -200,7 +200,7 @@ func Exchange(client *http.Client, server string, msg *dns.Msg) (*dns.Msg, error
 	req.Header.Set("Content-Type", "application/dns-message")
 	req.Header.Set("Accept", "application/dns-message")
 
-	res, err := client.Do(req)
+	res, err := client.Do(req.WithContext(ctx))
 	if err != nil {
 		return nil, fmt.Errorf("failed to send doh request: %w", err)
 	}
@@ -223,49 +223,48 @@ func Exchange(client *http.Client, server string, msg *dns.Msg) (*dns.Msg, error
 	return out, nil
 }
 
-func testServer(hc *http.Client, server string) bool {
+func testServer(ctx context.Context, hc *http.Client, server string) bool {
 	msg := &dns.Msg{}
 	msg.SetQuestion("example.com.", dns.TypeANY)
-	_, err := Exchange(hc, server, msg)
+	_, err := Exchange(ctx, hc, server, msg)
 	return err == nil
 }
 
-func ValidateServer(hc *http.Client, server string) (string, error) {
+func ValidateServer(ctx context.Context, hc *http.Client, server string) (string, error) {
 	if u, err := url.Parse(server); err == nil {
 		// this is a valid url, try exchanging a message
-		if testServer(hc, server) {
+		if testServer(ctx, hc, server) {
 			return server, nil
 		}
 
 		if u.Path == "" || u.Path == "/" {
 			// maybe it's missing the path, try adding /dns-query
 			u.Path = "/dns-query"
-			if testServer(hc, u.String()) {
+			if testServer(ctx, hc, u.String()) {
 				return u.String(), nil
 			}
 		}
 	}
 
 	if !strings.HasPrefix(server, "http://") && !strings.HasPrefix(server, "https://") {
-		if testServer(hc, "http://"+server) {
+		if testServer(ctx, hc, "http://"+server) {
 			return "http://" + server, nil
 		}
 
-		if testServer(hc, "https://"+server) {
+		if testServer(ctx, hc, "https://"+server) {
 			return "https://" + server, nil
 		}
 
 		if u, err := url.Parse("https://" + server); err == nil {
 			if u.Path == "" || u.Path == "/" {
-
 				// maybe it's missing the path, try adding /dns-query
 				u.Path = "/dns-query"
-				if testServer(hc, u.String()) {
+				if testServer(ctx, hc, u.String()) {
 					return u.String(), nil
 				}
 
 				u.Scheme = "http"
-				if testServer(hc, u.String()) {
+				if testServer(ctx, hc, u.String()) {
 					return u.String(), nil
 				}
 			}

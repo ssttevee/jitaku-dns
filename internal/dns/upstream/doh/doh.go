@@ -1,6 +1,7 @@
 package doh
 
 import (
+	"context"
 	"net/http"
 
 	"github.com/miekg/dns"
@@ -16,13 +17,13 @@ func (d *DoHUpstream) String() string {
 	return d.URL
 }
 
-func (d *DoHUpstream) ForwardMessage(msg *dns.Msg) (*dns.Msg, error) {
+func (d *DoHUpstream) ForwardMessage(ctx context.Context, msg *dns.Msg) (*dns.Msg, error) {
 	client := http.DefaultClient
 	if d.Client != nil {
 		client = d.Client
 	}
 
-	return dohutil.Exchange(client, d.URL, msg)
+	return dohutil.Exchange(ctx, client, d.URL, msg)
 }
 
 func (d *DoHUpstream) Close() error {

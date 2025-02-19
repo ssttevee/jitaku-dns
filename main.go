@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"flag"
 	"fmt"
@@ -93,9 +94,9 @@ func (h *Jitaku) GetConfigPath() string {
 	return h.configPath
 }
 
-func (h *Jitaku) SetConfig(c *config.Config) error {
+func (h *Jitaku) SetConfig(ctx context.Context, c *config.Config) error {
 	initialized := c.Initialize()
-	if err := initialized.Validate(); err != nil {
+	if err := initialized.Validate(ctx); err != nil {
 		return err
 	}
 
@@ -124,7 +125,7 @@ func (c *Jitaku) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 	// 	}
 	// }
 
-	res, err := c.ProcessMessage(r)
+	res, err := c.ProcessMessage(context.Background(), r)
 	if err != nil {
 		log.Printf("ERROR: Failed to process message: %v", err)
 	}

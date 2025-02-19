@@ -1,6 +1,7 @@
 package config
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net"
@@ -55,7 +56,7 @@ func (c *Config) Serialize() []byte {
 
 var ErrMissingBootstrapServers = errors.New("bootstrap servers required for DoH")
 
-func serverToUpstream(hc *http.Client, server string) (upstream.Upstream, string, error) {
+func serverToUpstream(ctx context.Context, hc *http.Client, server string) (upstream.Upstream, string, error) {
 	if u, _ := url.Parse(server); u != nil {
 		if u.Scheme == "tcp" || u.Scheme == "udp" {
 			host := u.Host
@@ -74,7 +75,7 @@ func serverToUpstream(hc *http.Client, server string) (upstream.Upstream, string
 				return nil, "", ErrMissingBootstrapServers
 			}
 
-			if validatedServer, _ := dohutil.ValidateServer(hc, server); validatedServer != "" {
+			if validatedServer, _ := dohutil.ValidateServer(ctx, hc, server); validatedServer != "" {
 				return &doh.DoHUpstream{
 					Client: hc,
 					URL:    validatedServer,
@@ -111,8 +112,8 @@ func serverToUpstream(hc *http.Client, server string) (upstream.Upstream, string
 	return nil, "", fmt.Errorf("invalid server %s", server)
 }
 
-func serverToBootstrap(server string) (upstream.Upstream, string, error) {
-	upstream, formattedServer, err := serverToUpstream(nil, server)
+func serverToBootstrap(ctx context.Context, server string) (upstream.Upstream, string, error) {
+	upstream, formattedServer, err := serverToUpstream(ctx, nil, server)
 	if err != nil {
 		if errors.Is(err, ErrMissingBootstrapServers) {
 			return nil, "", fmt.Errorf("DoH server cannot be used for bootstrap: %s", server)
@@ -124,8 +125,8 @@ func serverToBootstrap(server string) (upstream.Upstream, string, error) {
 	return upstream, formattedServer, nil
 }
 
-func filterToUpstream(url string) (upstream.Upstream, string, error) {
-	f, err := filter.NewFilterUpstream(http.DefaultClient, url)
+func filterToUpstream(ctx context.Context, url string) (upstream.Upstream, string, error) {
+	f, err := filter.NewFilterUpstream(ctx, http.DefaultClient, url)
 	if err != nil {
 		return nil, "", err
 	}
@@ -135,18 +136,18 @@ func filterToUpstream(url string) (upstream.Upstream, string, error) {
 
 type LazyUpstream struct {
 	server   string
-	initFunc func(server string) (upstream.Upstream, string, error)
+	initFunc func(ctx context.Context, server string) (upstream.Upstream, string, error)
 
 	once     sync.Once
 	initerr  error
 	upstream upstream.Upstream
 }
 
-func (l *LazyUpstream) doinit() error {
+func (l *LazyUpstream) doinit(ctx context.Context) error {
 	l.once.Do(func() {
 		s := strings.TrimSpace(l.server)
 		if len(s) > 0 && !strings.HasPrefix(s, "#") {
-			l.upstream, l.server, l.initerr = l.initFunc(s)
+			l.upstream, l.server, l.initerr = l.initFunc(ctx, s)
 		}
 	})
 
@@ -158,7 +159,7 @@ func (l *LazyUpstream) ConfigLine() string {
 }
 
 func (l *LazyUpstream) Inner() upstream.Upstream {
-	l.doinit()
+	l.doinit(context.Background())
 	return l.upstream
 }
 
@@ -170,21 +171,20 @@ func (l *LazyUpstream) String() string {
 	return l.server
 }
 
-func (l *LazyUpstream) ForwardMessage(msg *dns.Msg) (*dns.Msg, error) {
-	l.doinit()
+func (l *LazyUpstream) ForwardMessage(ctx context.Context, msg *dns.Msg) (*dns.Msg, error) {
+	l.doinit(ctx)
 	if l.initerr != nil {
 		return nil, l.initerr
 	}
 
 	if l.upstream != nil {
-		return l.upstream.ForwardMessage(msg)
+		return l.upstream.ForwardMessage(ctx, msg)
 	}
 
 	return nil, nil
 }
 
 func (l *LazyUpstream) Close() error {
-	l.doinit()
 	if l.upstream != nil {
 		defer func() {
 			l.upstream = nil
@@ -208,27 +208,27 @@ type InitializedConfig struct {
 	Rewrites        upstream.Upstream
 }
 
-func (c *InitializedConfig) Validate() error {
+func (c *InitializedConfig) Validate(ctx context.Context) error {
 	for _, s := range c.BootstrapServers {
-		if err := s.(*LazyUpstream).doinit(); err != nil {
+		if err := s.(*LazyUpstream).doinit(ctx); err != nil {
 			return fmt.Errorf("failed to validate bootstrap server: %w", err)
 		}
 	}
 
 	for _, s := range c.UpstreamServers {
-		if err := s.(*LazyUpstream).doinit(); err != nil {
+		if err := s.(*LazyUpstream).doinit(ctx); err != nil {
 			return fmt.Errorf("failed to validate upstream server: %w", err)
 		}
 	}
 
 	for _, s := range c.FallbackServers {
-		if err := s.(*LazyUpstream).doinit(); err != nil {
+		if err := s.(*LazyUpstream).doinit(ctx); err != nil {
 			return fmt.Errorf("failed to validate fallback server: %w", err)
 		}
 	}
 
 	for _, s := range c.Filters {
-		if err := s.(*LazyUpstream).doinit(); err != nil {
+		if err := s.(*LazyUpstream).doinit(ctx); err != nil {
 			return fmt.Errorf("failed to validate filters: %w", err)
 		}
 	}
@@ -280,14 +280,14 @@ func (c *InitializedConfig) Config() *Config {
 	}
 }
 
-func (c *InitializedConfig) forwardMessage(r *dns.Msg) (*dns.Msg, upstream.Upstream, error) {
+func (c *InitializedConfig) forwardMessage(ctx context.Context, r *dns.Msg) (*dns.Msg, upstream.Upstream, error) {
 	if c.Strategy == nil {
 		c.Strategy = upstream.DefaultStrategy
 	}
 
 	var lastErr error
 	if c.Rewrites != nil {
-		msg, err := c.Rewrites.ForwardMessage(r)
+		msg, err := c.Rewrites.ForwardMessage(ctx, r)
 		if err != nil {
 			lastErr = err
 		} else if msg != nil {
@@ -296,7 +296,7 @@ func (c *InitializedConfig) forwardMessage(r *dns.Msg) (*dns.Msg, upstream.Upstr
 	}
 
 	if len(c.Filters) > 0 {
-		msg, i, err := c.Strategy.ForwardMessage(c.Filters, r)
+		msg, i, err := c.Strategy.ForwardMessage(ctx, c.Filters, r)
 		server := c.Filters[i]
 		if err != nil {
 			lastErr = err
@@ -306,7 +306,7 @@ func (c *InitializedConfig) forwardMessage(r *dns.Msg) (*dns.Msg, upstream.Upstr
 	}
 
 	if len(c.UpstreamServers) > 0 {
-		msg, i, err := c.Strategy.ForwardMessage(c.UpstreamServers, r)
+		msg, i, err := c.Strategy.ForwardMessage(ctx, c.UpstreamServers, r)
 		server := c.UpstreamServers[i]
 		if err != nil {
 			lastErr = err
@@ -316,7 +316,7 @@ func (c *InitializedConfig) forwardMessage(r *dns.Msg) (*dns.Msg, upstream.Upstr
 	}
 
 	if len(c.FallbackServers) > 0 {
-		msg, i, err := c.Strategy.ForwardMessage(c.FallbackServers, r)
+		msg, i, err := c.Strategy.ForwardMessage(ctx, c.FallbackServers, r)
 		server := c.FallbackServers[i]
 		if err != nil {
 			lastErr = err
@@ -328,10 +328,10 @@ func (c *InitializedConfig) forwardMessage(r *dns.Msg) (*dns.Msg, upstream.Upstr
 	return nil, nil, lastErr
 }
 
-func (c *InitializedConfig) ProcessMessage(r *dns.Msg) (*internal.MessageResult, error) {
+func (c *InitializedConfig) ProcessMessage(ctx context.Context, r *dns.Msg) (*internal.MessageResult, error) {
 	start := time.Now()
 
-	res, server, err := c.forwardMessage(r)
+	res, server, err := c.forwardMessage(ctx, r)
 	if err != nil {
 		err = fmt.Errorf("Failed to forward message to upstream: %w", err)
 	}
@@ -377,8 +377,8 @@ func (c *Config) Initialize() *InitializedConfig {
 		hc.Timeout = 5 * time.Second
 	}
 
-	initFunc := func(url string) (upstream.Upstream, string, error) {
-		return serverToUpstream(hc, url)
+	initFunc := func(ctx context.Context, url string) (upstream.Upstream, string, error) {
+		return serverToUpstream(ctx, hc, url)
 	}
 
 	upstreams := make([]upstream.Upstream, len(c.Upstream.Servers))

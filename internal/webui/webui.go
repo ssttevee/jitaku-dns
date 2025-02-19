@@ -1,12 +1,15 @@
 package webui
 
 import (
+	"context"
+	"errors"
 	"html"
 	"io"
 	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/miekg/dns"
 	"github.com/ssttevee/jitaku-dns/internal"
@@ -35,9 +38,9 @@ var digTypes = []dns.Type{
 
 type Controller interface {
 	LogChan() <-chan *internal.LogEntry
-	ProcessMessage(msg *dns.Msg) (*internal.MessageResult, error)
+	ProcessMessage(ctx context.Context, msg *dns.Msg) (*internal.MessageResult, error)
 	GetConfig() *config.Config
-	SetConfig(*config.Config) error
+	SetConfig(ctx context.Context, cfg *config.Config) error
 	GetConfigPath() string
 }
 
@@ -51,6 +54,9 @@ func Max(x, y int) int {
 
 func RegisterWebUI(mux *http.ServeMux, c Controller) {
 	logsQueue := newPubSub(c.LogChan())
+
+	var mu sync.Mutex
+	var cancelConfigUpdate context.CancelFunc
 
 	mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(RootLayout(RootLayoutProps{
@@ -74,7 +80,7 @@ func RegisterWebUI(mux *http.ServeMux, c Controller) {
 			msg := &dns.Msg{}
 			msg.SetQuestion(dns.Fqdn(name), uint16(typ))
 
-			res, err = c.ProcessMessage(msg)
+			res, err = c.ProcessMessage(r.Context(), msg)
 		}
 
 		resultContent := DigResult(DigResultProps{
@@ -242,6 +248,7 @@ func RegisterWebUI(mux *http.ServeMux, c Controller) {
 		var yaml string
 		var cfg *config.Config
 		var cfgerr error
+
 		if yamlmode {
 			yaml = q.Get("yaml")
 			if yaml == "" {
@@ -284,11 +291,22 @@ func RegisterWebUI(mux *http.ServeMux, c Controller) {
 		}
 
 		if cfg != nil && cfgerr == nil {
-			cfgerr = c.SetConfig(cfg)
+			ctx, cancel := context.WithCancel(r.Context())
+
+			mu.Lock()
+			if cancelConfigUpdate != nil {
+				cancelConfigUpdate()
+			}
+			cancelConfigUpdate = cancel
+			mu.Unlock()
+
+			cfgerr = c.SetConfig(ctx, cfg)
 		}
 
 		var msg string
-		if cfgerr != nil {
+		if errors.Is(cfgerr, context.Canceled) {
+			msg = "Config update cancelled. Maybe someone else is editing the config."
+		} else if cfgerr != nil {
 			msg = cfgerr.Error()
 		} else {
 			msg = "Config saved successfully."
@@ -328,7 +346,6 @@ func SettingsContent(props SettingsContentProps) string {
 <code-input class="flex-grow-1" language="yaml" placeholder="" name="yaml">` + props.yaml + `</code-input>
 `
 	} else if props.cfg != nil {
-
 		currentStrategy := upstream.DefaultStrategy.Enum()
 		if s := props.cfg.Upstream.Strategy; s != nil {
 			currentStrategy = *s

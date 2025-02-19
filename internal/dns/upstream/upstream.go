@@ -1,12 +1,14 @@
 package upstream
 
 import (
+	"context"
+
 	"github.com/miekg/dns"
 )
 
 type Upstream interface {
 	String() string
-	ForwardMessage(msg *dns.Msg) (*dns.Msg, error)
+	ForwardMessage(ctx context.Context, msg *dns.Msg) (*dns.Msg, error)
 	Close() error
 }
 
@@ -16,7 +18,7 @@ func (n *NoopUpstream) String() string {
 	return "noop"
 }
 
-func (n *NoopUpstream) ForwardMessage(msg *dns.Msg) (*dns.Msg, error) {
+func (n *NoopUpstream) ForwardMessage(ctx context.Context, msg *dns.Msg) (*dns.Msg, error) {
 	return nil, nil
 }
 

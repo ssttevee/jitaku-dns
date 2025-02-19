@@ -2,6 +2,7 @@ package filter
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"io"
 	"log"
@@ -20,8 +21,13 @@ type FilterUpstream struct {
 	filter Filter
 }
 
-func NewFilterUpstream(hc *http.Client, url string) (*FilterUpstream, error) {
-	res, err := hc.Get(url)
+func NewFilterUpstream(ctx context.Context, hc *http.Client, url string) (*FilterUpstream, error) {
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %v", err)
+	}
+
+	res, err := hc.Do(req.WithContext(ctx))
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch filter: %v", err)
 	}
@@ -29,7 +35,7 @@ func NewFilterUpstream(hc *http.Client, url string) (*FilterUpstream, error) {
 	defer res.Body.Close()
 
 	start := time.Now()
-	f, err := parseFilter(res.Body)
+	f, err := parseFilter(ctx, res.Body)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse filter: %v", err)
 	}
@@ -69,7 +75,7 @@ func (f *FilterUpstream) shouldBlock(msg *dns.Msg) (bool, error) {
 	return false, nil
 }
 
-func (f *FilterUpstream) ForwardMessage(msg *dns.Msg) (*dns.Msg, error) {
+func (f *FilterUpstream) ForwardMessage(ctx context.Context, msg *dns.Msg) (*dns.Msg, error) {
 	ok, err := f.shouldBlock(msg)
 	if err != nil {
 		return nil, fmt.Errorf("filter match failed: %v", err)
@@ -148,11 +154,15 @@ func SplitHostsFileLine(line string) (string, string) {
 	return parts[0], name
 }
 
-func parseHostsFileFilter(r io.Reader) (Filter, error) {
+func parseHostsFileFilter(ctx context.Context, r io.Reader) (Filter, error) {
 	hosts := make(map[string]struct{})
 
 	scanner := bufio.NewScanner(r)
 	for scanner.Scan() {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+
 		ip, name := SplitHostsFileLine(scanner.Text())
 		if ip != "0.0.0.0" || name == "" {
 			continue
@@ -172,7 +182,7 @@ func parseHostsFileFilter(r io.Reader) (Filter, error) {
 	}, nil
 }
 
-func parseABPFilter(r io.Reader) (Filter, error) {
+func parseABPFilter(ctx context.Context, r io.Reader) (Filter, error) {
 	rules, err := adblock.ParseRules(r)
 	if err != nil {
 		return nil, err
@@ -180,6 +190,10 @@ func parseABPFilter(r io.Reader) (Filter, error) {
 
 	matcher := adblock.NewMatcher()
 	for i, rule := range rules {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+
 		if err := matcher.AddRule(rule, i); err != nil {
 			return nil, fmt.Errorf("failed to add rule: %v", err)
 		}
@@ -190,7 +204,7 @@ func parseABPFilter(r io.Reader) (Filter, error) {
 	}, nil
 }
 
-func parseFilter(r io.Reader) (Filter, error) {
+func parseFilter(ctx context.Context, r io.Reader) (Filter, error) {
 	buffered := bufio.NewReader(r)
 	head, err := buffered.Peek(buffered.Size())
 	var pos int
@@ -211,7 +225,7 @@ func parseFilter(r io.Reader) (Filter, error) {
 				// finish parsing the rest of the file as a hosts file«
 				log.Printf("DEBUG: found hosts file filter: %s", line)
 				buffered.Discard(pos)
-				return parseHostsFileFilter(buffered)
+				return parseHostsFileFilter(ctx, buffered)
 			}
 
 			rule, _ := adblock.ParseRule(line)
@@ -219,7 +233,7 @@ func parseFilter(r io.Reader) (Filter, error) {
 				// finish parsing the rest of the file as an ABP filter file«
 				log.Printf("DEBUG: found ad block plus filter: %s", line)
 				buffered.Discard(pos)
-				return parseABPFilter(buffered)
+				return parseABPFilter(ctx, buffered)
 			}
 		}
 

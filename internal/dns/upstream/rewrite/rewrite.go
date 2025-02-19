@@ -1,6 +1,7 @@
 package rewrite
 
 import (
+	"context"
 	"net"
 	"strings"
 
@@ -62,7 +63,7 @@ func (c *RewriteUpstream) Close() error {
 	return nil
 }
 
-func (c *RewriteUpstream) ForwardMessage(msg *dns.Msg) (*dns.Msg, error) {
+func (c *RewriteUpstream) ForwardMessage(ctx context.Context, msg *dns.Msg) (*dns.Msg, error) {
 	if msg.Opcode != dns.OpcodeQuery || len(msg.Question) < 1 {
 		return nil, nil
 	}
