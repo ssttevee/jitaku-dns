@@ -15,6 +15,7 @@ Jitaku (自宅) is Japanese for "one's home".
 - Web-based dig tool for debugging
 - Web-based configuration editor
 - Web-based pi image updater
+- Embedded web interface assets (using `builtinassets` build tag)
 
 ## Non-Features
 
@@ -26,14 +27,16 @@ Jitaku (自宅) is Japanese for "one's home".
 - Pretty graphs on the dashboard
 - One-click update pi image from web interface (also downgrading)
 - Cache DNS responses
-- Embed web interface dependencies into binary
 - Automatically update ad block lists
 
 ## Building
 
 ```sh
+# Download assets for `builtinassets` build tag
+go generate ./...
+
 # Build all target images
-make
+make GO_BUILDTAGS="builtinassets anotherbuildtag"
 ```
 
 ## Development

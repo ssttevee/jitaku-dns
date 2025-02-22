@@ -1,3 +1,5 @@
+//go:generate go run ../cmd/download-webui-resources
+
 package webui
 
 import (
@@ -52,7 +54,9 @@ func Max(x, y int) int {
 	return y
 }
 
-func RegisterWebUI(mux *http.ServeMux, c Controller) {
+func MakeHandler(c Controller) http.Handler {
+	mux := http.NewServeMux()
+
 	logsQueue := newPubSub(c.LogChan())
 
 	var mu sync.Mutex
@@ -205,7 +209,6 @@ func RegisterWebUI(mux *http.ServeMux, c Controller) {
 					"https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/line-numbers/prism-line-numbers.min.js",
 					"https://cdn.jsdelivr.net/gh/WebCoder49/code-input@2.4.0/code-input.min.js",
 					"https://cdn.jsdelivr.net/gh/WebCoder49/code-input@2.4.0/plugins/indent.min.js",
-					"https://cdn.jsdelivr.net/gh/WebCoder49/code-input@2.4.0/plugins/indent.min.js",
 				},
 				scriptSnippets: []string{
 					`codeInput.registerTemplate("syntax-highlighted", codeInput.templates.prism(Prism, []));`,
@@ -321,6 +324,10 @@ func RegisterWebUI(mux *http.ServeMux, c Controller) {
 	})
 
 	registerGoKrazyRoutes(mux)
+
+	mux.Handle("GET /assets/", assetsHandler)
+
+	return mux
 }
 
 type SettingsContentProps struct {
@@ -570,20 +577,24 @@ func RootLayout(props RootLayoutProps, children ...string) string {
 		navItemsHtml += `<li class="nav-item"><a class="nav-link` + extraClasses + `"` + extraAttrs + ` href="` + path + `">` + item.Name + `</a></li>`
 	}
 
+	var preload string
+
 	var stylesheets string
-	for _, href := range append([]string{
+	for _, href := range dedupe(append([]string{
 		"https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css",
-	}, props.stylesheets...) {
-		stylesheets += `<link rel="stylesheet" href="` + html.EscapeString(href) + `">`
+	}, props.stylesheets...)) {
+		preload += `<link rel="preload" href="` + html.EscapeString(fixAssetURL(href)) + `" as="style" />`
+		stylesheets += `<link rel="stylesheet" href="` + html.EscapeString(fixAssetURL(href)) + `">`
 	}
 
 	var scripts string
-	for _, src := range append([]string{
+	for _, src := range dedupe(append([]string{
 		"https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js",
 		"https://cdn.jsdelivr.net/npm/htmx.org@2.0.4/dist/htmx.min.js",
 		"https://cdn.jsdelivr.net/npm/htmx-ext-sse@2.2.2/sse.js",
-	}, props.scripts...) {
-		scripts += `<script src="` + html.EscapeString(src) + `"></script>`
+	}, props.scripts...)) {
+		preload += `<link rel="preload" href="` + html.EscapeString(fixAssetURL(src)) + `" as="script" />`
+		scripts += `<script src="` + html.EscapeString(fixAssetURL(src)) + `"></script>`
 	}
 
 	for _, js := range props.scriptSnippets {
@@ -598,7 +609,7 @@ func RootLayout(props RootLayoutProps, children ...string) string {
 	<meta charset="utf-8">
 	<meta name="viewport" content="width=device-width, initial-scale=1">
 	<title>` + titlePrefix + `JitakuDNS</title>
-	` + stylesheets + `
+	` + preload + stylesheets + `
 </head>
 
 <body class="min-vh-100 d-flex flex-column">

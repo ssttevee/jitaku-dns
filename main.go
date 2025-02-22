@@ -79,13 +79,6 @@ func (j *Jitaku) LogChan() <-chan *internal.LogEntry {
 	return j.logChan
 }
 
-func (h *Jitaku) MakeWebUIHandler() http.Handler {
-	mux := http.NewServeMux()
-	webui.RegisterWebUI(mux, h)
-
-	return mux
-}
-
 func (h *Jitaku) GetConfig() *config.Config {
 	return h.InitializedConfig.Config()
 }
@@ -149,7 +142,7 @@ func (c *Jitaku) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 func main() {
 	host := flag.String("host", "0.0.0.0", "address to listen on (defaults to \"0.0.0.0\")")
 	port := flag.Int("port", 53, "port to listen on")
-	webui := flag.Bool("webui", false, "whether to run the web UI")
+	enableWebui := flag.Bool("webui", false, "whether to run the web UI")
 	webuiHost := flag.String("webui-host", "127.0.0.1", "address to listen on (defaults to 127.0.0.1)")
 	webuiPort := flag.Int("webui-port", 8808, "port to run the web UI on")
 	configPath := flag.String("config", config.DefaultConfigPath, "config file path")
@@ -211,9 +204,9 @@ func main() {
 	}
 
 	var webuiServer *http.Server
-	if *webui {
+	if *enableWebui {
 		webuiServer = &http.Server{
-			Handler: h.MakeWebUIHandler(),
+			Handler: webui.MakeHandler(h),
 		}
 
 		l, err := net.Listen("tcp", fmt.Sprintf("%s:%d", *webuiHost, *webuiPort))
