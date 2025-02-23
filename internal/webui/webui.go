@@ -6,10 +6,8 @@ import (
 	"context"
 	"errors"
 	"html"
-	"io"
 	"math"
 	"net/http"
-	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -224,17 +222,8 @@ func MakeHandler(c Controller) http.Handler {
 	})
 
 	mux.HandleFunc("POST /settings", func(w http.ResponseWriter, r *http.Request) {
-		defer r.Body.Close()
-
-		body, err := io.ReadAll(r.Body)
-		if err != nil {
-			w.WriteHeader(http.StatusBadRequest)
-			return
-		}
-
-		q, err := url.ParseQuery(string(body))
-		if err != nil {
-			w.WriteHeader(http.StatusBadRequest)
+		if err := r.ParseForm(); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
 
@@ -254,7 +243,7 @@ func MakeHandler(c Controller) http.Handler {
 		var cfgerr error
 
 		if yamlmode {
-			yaml = q.Get("yaml")
+			yaml = r.Form.Get("yaml")
 			if yaml == "" {
 				path := r.URL.Path
 				if r.URL.RawQuery != "" {
@@ -273,23 +262,23 @@ func MakeHandler(c Controller) http.Handler {
 			}
 		} else {
 			cfg = &config.Config{}
-			if bootstraps := q.Get("bootstraps"); bootstraps != "" {
+			if bootstraps := r.Form.Get("bootstraps"); bootstraps != "" {
 				cfg.Upstream.Bootstrap = strings.Split(bootstraps, "\n")
 			}
 
-			if servers := q.Get("servers"); servers != "" {
+			if servers := r.Form.Get("servers"); servers != "" {
 				cfg.Upstream.Servers = strings.Split(servers, "\n")
 			}
 
-			if fallbacks := q.Get("fallbacks"); fallbacks != "" {
+			if fallbacks := r.Form.Get("fallbacks"); fallbacks != "" {
 				cfg.Upstream.Fallback = strings.Split(fallbacks, "\n")
 			}
 
-			if filters := q.Get("filters"); filters != "" {
+			if filters := r.Form.Get("filters"); filters != "" {
 				cfg.Filters = strings.Split(filters, "\n")
 			}
 
-			if interval := q.Get("filter-update-interval"); interval != "" {
+			if interval := r.Form.Get("filter-update-interval"); interval != "" {
 				seconds, err := strconv.ParseFloat(interval, 64)
 				if err == nil {
 					d := int(math.Max(0, seconds))
@@ -297,7 +286,7 @@ func MakeHandler(c Controller) http.Handler {
 				}
 			}
 
-			if strategy := upstream.ForwardStrategyKind(q.Get("strategy")); strategy.Valid() {
+			if strategy := upstream.ForwardStrategyKind(r.Form.Get("strategy")); strategy.Valid() {
 				cfg.Upstream.Strategy = &strategy
 			}
 		}
@@ -549,12 +538,32 @@ type RootLayoutProps struct {
 	stylesheets    []string
 	scripts        []string
 	scriptSnippets []string
+	navItems       []navItem
 }
 
 type navItem struct {
 	Name        string
 	Path        string
 	DynamicPath func(r *http.Request) string
+}
+
+var defaultNavItems = []navItem{
+	{
+		Name: "Dashboard",
+		Path: "/",
+	},
+	{
+		Name: "Dig",
+		Path: "/dig",
+	},
+	{
+		Name: "Logs",
+		Path: "/logs",
+	},
+	{
+		Name: "Settings",
+		Path: "/settings",
+	},
 }
 
 func RootLayout(props RootLayoutProps, children ...string) string {
@@ -568,24 +577,14 @@ func RootLayout(props RootLayoutProps, children ...string) string {
 		rootAttrs = ` data-bs-theme="dark"`
 	}
 
-	navItems := append([]navItem{
-		{
-			Name: "Dashboard",
-			Path: "/",
-		},
-		{
-			Name: "Dig",
-			Path: "/dig",
-		},
-		{
-			Name: "Logs",
-			Path: "/logs",
-		},
-		{
-			Name: "Settings",
-			Path: "/settings",
-		},
-	}, gokrazyNavItems...)
+	var navItems []navItem
+	if props.navItems == nil {
+		navItems = defaultNavItems
+	} else {
+		navItems = append(navItems, props.navItems...)
+	}
+
+	navItems = append(navItems, gokrazyNavItems...)
 
 	var navItemsHtml string
 	for _, item := range navItems {

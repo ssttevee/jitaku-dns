@@ -22,6 +22,12 @@ import (
 	"github.com/ssttevee/jitaku-dns/internal/webui"
 )
 
+var (
+	enableWebui = flag.Bool("webui", false, "whether to run the web UI")
+	webuiHost   = flag.String("webui-host", "127.0.0.1", "address to listen on (defaults to 127.0.0.1)")
+	webuiPort   = flag.Int("webui-port", 8808, "port to run the web UI on")
+)
+
 type Jitaku struct {
 	*config.InitializedConfig
 
@@ -64,8 +70,24 @@ func NewJitakuFromConfigPath(configPath string) (*Jitaku, error) {
 			return nil, fmt.Errorf("failed to read config file: %w", err)
 		}
 
-		if cfg, err = config.Parse(data); err != nil {
-			return nil, fmt.Errorf("failed to parse config: %w", err)
+		flag.Parse()
+
+		for {
+			if cfg, err = config.Parse(data); err != nil {
+				if *enableWebui {
+					// if webui is enabled, serve a safe-mode page instead of crashing
+					data, err = webui.UpdatedConfigFromSafemode(fmt.Sprintf("%s:%d", *webuiHost, *webuiPort), err.Error(), data)
+					if err != nil {
+						return nil, fmt.Errorf("config safe mode: %w", err)
+					}
+
+					continue
+				} else {
+					return nil, fmt.Errorf("failed to parse config: %w", err)
+				}
+			}
+
+			break
 		}
 	}
 
@@ -216,6 +238,9 @@ func getConfigPath() string {
 }
 
 func main() {
+	host := flag.String("host", "0.0.0.0", "address to listen on (defaults to \"0.0.0.0\")")
+	port := flag.Int("port", 53, "port to listen on")
+
 	configPath := getConfigPath()
 	if configPath == "" {
 		log.Println("INFO: loading default config")
@@ -237,11 +262,6 @@ func main() {
 		}
 	}()
 
-	host := flag.String("host", "0.0.0.0", "address to listen on (defaults to \"0.0.0.0\")")
-	port := flag.Int("port", 53, "port to listen on")
-	enableWebui := flag.Bool("webui", false, "whether to run the web UI")
-	webuiHost := flag.String("webui-host", "127.0.0.1", "address to listen on (defaults to 127.0.0.1)")
-	webuiPort := flag.Int("webui-port", 8808, "port to run the web UI on")
 	flag.String("config", configPath, "config file path")
 	flag.Parse()
 
