@@ -103,6 +103,9 @@ func (f *HostsFilter) RuleCount() int {
 }
 
 func (f *HostsFilter) ShouldBlock(name string) (bool, error) {
+	name = dns.Fqdn(name)
+	name = strings.TrimSuffix(name, ".")
+
 	_, ok := f.hosts[name]
 	return ok, nil
 }
@@ -138,6 +141,9 @@ func parseHostsFileFilter(ctx context.Context, r io.Reader) (Filter, error) {
 			continue
 		}
 
+		name = dns.Fqdn(name)
+		name = strings.TrimSuffix(name, ".")
+
 		if _, ok := hosts[name]; !ok {
 			hosts[name] = struct{}{}
 		}
@@ -169,6 +175,9 @@ func parseABPFilter(ctx context.Context, r io.Reader) (Filter, error) {
 
 		if strings.HasPrefix(line, "||") && strings.HasSuffix(line, "^") {
 			name := strings.TrimSpace(line[2 : len(line)-1])
+			name = dns.Fqdn(name)
+			name = strings.TrimSuffix(name, ".")
+
 			if _, ok := hosts[name]; !ok {
 				hosts[name] = struct{}{}
 			}
