@@ -12,6 +12,7 @@ import (
 	"os/signal"
 	"path"
 	"runtime"
+	"strings"
 	"syscall"
 	"time"
 
@@ -65,7 +66,11 @@ func NewJitakuFromConfigPath(configPath string) (*Jitaku, error) {
 
 	os.Stderr.WriteString(string(cfg.Serialize()))
 
-	return NewJitaku(cfg), nil
+	j := NewJitaku(cfg)
+
+	j.configPath = configPath
+
+	return j, nil
 }
 
 func NewJitaku(config *config.Config) *Jitaku {
@@ -139,27 +144,45 @@ func (c *Jitaku) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 	}
 }
 
+func getConfigPath() string {
+	if path := os.Getenv("JITAKU_CONFIG"); path != "" {
+		return path
+	}
+
+	// basic arg parser to read config path
+	for i := 1; i < len(os.Args); i++ {
+		if os.Args[i] == "-config" && i+1 < len(os.Args) {
+			return os.Args[i+1]
+		}
+
+		if strings.HasPrefix(os.Args[i], "-config=") && len(os.Args[i]) > 8 {
+			return os.Args[i][8:]
+		}
+	}
+
+	return config.DefaultConfigPath
+}
+
 func main() {
+	configPath := getConfigPath()
+	if configPath == "" {
+		log.Println("INFO: loading default config")
+	} else {
+		log.Println("INFO: loading config from", configPath)
+	}
+
+	h, err := NewJitakuFromConfigPath(configPath)
+	if err != nil {
+		log.Fatalf("ERROR: Failed to create server: %v", err)
+	}
+
 	host := flag.String("host", "0.0.0.0", "address to listen on (defaults to \"0.0.0.0\")")
 	port := flag.Int("port", 53, "port to listen on")
 	enableWebui := flag.Bool("webui", false, "whether to run the web UI")
 	webuiHost := flag.String("webui-host", "127.0.0.1", "address to listen on (defaults to 127.0.0.1)")
 	webuiPort := flag.Int("webui-port", 8808, "port to run the web UI on")
-	configPath := flag.String("config", config.DefaultConfigPath, "config file path")
+	flag.String("config", configPath, "config file path")
 	flag.Parse()
-
-	if *configPath == "" {
-		log.Println("INFO: loading default config")
-	} else {
-		log.Println("INFO: loading config from", *configPath)
-	}
-
-	h, err := NewJitakuFromConfigPath(*configPath)
-	if err != nil {
-		log.Fatalf("ERROR: Failed to create scrubbr: %v", err)
-	}
-
-	h.configPath = *configPath
 
 	// TODO: Add support for multiple addresses
 	addrs := []string{fmt.Sprintf("%s:%d", *host, *port)}
