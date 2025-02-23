@@ -230,6 +230,13 @@ func main() {
 
 	defer h.close()
 
+	go func() {
+		// init config on in the background
+		if err := h.Validate(context.Background()); err != nil {
+			log.Printf("WARN: Failed to validate config: %v", err)
+		}
+	}()
+
 	host := flag.String("host", "0.0.0.0", "address to listen on (defaults to \"0.0.0.0\")")
 	port := flag.Int("port", 53, "port to listen on")
 	enableWebui := flag.Bool("webui", false, "whether to run the web UI")
