@@ -11,6 +11,7 @@ Jitaku (自宅) is Japanese for "one's home".
 - DNS over HTTPS (DoH) upstream support
 - Single fully-static binary
 - File-based configuration
+- Automatically update ad block lists
 - Minimalistic web interface
 - Web-based dig tool for debugging
 - Web-based configuration editor
@@ -27,7 +28,6 @@ Jitaku (自宅) is Japanese for "one's home".
 - Pretty graphs on the dashboard
 - One-click update pi image from web interface (also downgrading)
 - Cache DNS responses
-- Automatically update ad block lists
 
 ## Building
 

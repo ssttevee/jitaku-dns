@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"reflect"
 	"strings"
-	"time"
 
 	"github.com/miekg/dns"
 )
@@ -33,13 +32,10 @@ func NewFilterUpstream(ctx context.Context, hc *http.Client, url string) (*Filte
 
 	defer res.Body.Close()
 
-	start := time.Now()
 	f, err := parseFilter(ctx, res.Body)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse filter: %v", err)
 	}
-
-	log.Printf("INFO: parsed filter in %v", time.Since(start))
 
 	return &FilterUpstream{
 		url:    url,
@@ -211,8 +207,7 @@ func parseFilter(ctx context.Context, r io.Reader) (Filter, error) {
 		if len(line) > 0 && !strings.HasPrefix(line, "#") && !strings.HasPrefix(line, "!") {
 			ip, name := SplitHostsFileLine(line)
 			if net.ParseIP(ip) != nil && name != "" {
-				// finish parsing the rest of the file as a hosts file«
-				log.Printf("DEBUG: found hosts file filter: %s", line)
+				// finish parsing the rest of the file as a hosts file
 				buffered.Discard(pos)
 				return parseHostsFileFilter(ctx, buffered)
 			}

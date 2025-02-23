@@ -31,6 +31,8 @@ type UpstreamConfig struct {
 }
 
 type Config struct {
+	FilterUpdateInterval *int `yaml:"filter_update_interval,omitempty"`
+
 	Upstream UpstreamConfig `yaml:"upstream,omitempty"`
 	Filters  []string       `yaml:"filters,omitempty"`
 	Rewrites []string       `yaml:"rewrites,omitempty"`
@@ -143,11 +145,26 @@ type LazyUpstream struct {
 	upstream upstream.Upstream
 }
 
+func (l *LazyUpstream) Reinit(ctx context.Context) error {
+	s := strings.TrimSpace(l.server)
+	if len(s) > 0 && !strings.HasPrefix(s, "#") {
+		u, s, err := l.initFunc(ctx, s)
+		if err != nil {
+			return err
+		}
+
+		l.upstream = u
+		l.server = s
+	}
+
+	return nil
+}
+
 func (l *LazyUpstream) doinit(ctx context.Context) error {
 	l.once.Do(func() {
 		s := strings.TrimSpace(l.server)
 		if len(s) > 0 && !strings.HasPrefix(s, "#") {
-			l.upstream, l.server, l.initerr = l.initFunc(ctx, s)
+			l.initerr = l.Reinit(ctx)
 		}
 	})
 
@@ -199,6 +216,8 @@ func (l *LazyUpstream) Close() error {
 }
 
 type InitializedConfig struct {
+	FilterUpdateInterval *int
+
 	Strategy         upstream.ForwardStrategy
 	BootstrapServers []upstream.Upstream
 
@@ -206,6 +225,24 @@ type InitializedConfig struct {
 	FallbackServers []upstream.Upstream
 	Filters         []upstream.Upstream
 	Rewrites        upstream.Upstream
+}
+
+func (c *InitializedConfig) FilterUpdateIntervalDuration() time.Duration {
+	if c.FilterUpdateInterval != nil {
+		return time.Duration(*c.FilterUpdateInterval) * time.Second
+	}
+
+	return defaultFilterUpdateInterval
+}
+
+func (c *InitializedConfig) UpdateFilters(ctx context.Context) error {
+	for _, s := range c.Filters {
+		if err := s.(*LazyUpstream).Reinit(ctx); err != nil {
+			return fmt.Errorf("update filter %s: %w", s.(*LazyUpstream).server, err)
+		}
+	}
+
+	return nil
 }
 
 func (c *InitializedConfig) Validate(ctx context.Context) error {
@@ -269,6 +306,7 @@ func (c *InitializedConfig) Config() *Config {
 	}
 
 	return &Config{
+		FilterUpdateInterval: c.FilterUpdateInterval,
 		Upstream: UpstreamConfig{
 			Strategy:  strategy,
 			Servers:   servers,
@@ -415,12 +453,13 @@ func (c *Config) Initialize() *InitializedConfig {
 	}
 
 	return &InitializedConfig{
-		Rewrites:         rewriteUpstream,
-		Filters:          filters,
-		UpstreamServers:  upstreams,
-		FallbackServers:  fallback,
-		Strategy:         strategy,
-		BootstrapServers: bootstrap,
+		FilterUpdateInterval: c.FilterUpdateInterval,
+		Rewrites:             rewriteUpstream,
+		Filters:              filters,
+		UpstreamServers:      upstreams,
+		FallbackServers:      fallback,
+		Strategy:             strategy,
+		BootstrapServers:     bootstrap,
 	}
 }
 
@@ -443,6 +482,8 @@ var dnsIPs = []string{
 	"# 240c::6666",
 	"# 240c::6644",
 }
+
+var defaultFilterUpdateInterval = 24 * time.Hour
 
 var DefaultConfig = &Config{
 	Upstream: UpstreamConfig{

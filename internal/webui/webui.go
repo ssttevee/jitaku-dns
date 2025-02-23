@@ -7,6 +7,7 @@ import (
 	"errors"
 	"html"
 	"io"
+	"math"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -288,6 +289,14 @@ func MakeHandler(c Controller) http.Handler {
 				cfg.Filters = strings.Split(filters, "\n")
 			}
 
+			if interval := q.Get("filter-update-interval"); interval != "" {
+				seconds, err := strconv.ParseFloat(interval, 64)
+				if err == nil {
+					d := int(math.Max(0, seconds))
+					cfg.FilterUpdateInterval = &d
+				}
+			}
+
 			if strategy := upstream.ForwardStrategyKind(q.Get("strategy")); strategy.Valid() {
 				cfg.Upstream.Strategy = &strategy
 			}
@@ -373,26 +382,35 @@ func SettingsContent(props SettingsContentProps) string {
 	`
 		}
 
+		var filterUpdateIntervalValue string
+		if props.cfg.FilterUpdateInterval != nil {
+			if *props.cfg.FilterUpdateInterval > 0 {
+				filterUpdateIntervalValue = strconv.Itoa(*props.cfg.FilterUpdateInterval)
+			} else {
+				filterUpdateIntervalValue = "0"
+			}
+		}
+
 		body = `
 <div class="row">
 <div class="col col-lg-6">
 	<div class="card">
-		<div class="card-body">
-			<div class="mb-3">
+		<div class="card-body d-flex flex-column gap-4">
+			<div>
 				<label for="servers-text-area" class="form-label">
 					<h6>Upstream Servers</h6>
 					<p class="my-0 small text-secondary">Enter one server address per line. (Lines starting with <code>#</code> are ignored)</p>
 				</label>
 				<code-input language="ignore" placeholder="" id="servers-text-area" name="servers">` + strings.Join(props.cfg.Upstream.Servers, "\n") + `</code-input>
 			</div>
-			<fieldset class="mb-3">
+			<fieldset>
 				<legend><h6>Strategy</h6></legend>
 				<p class="mt-0 small text-secondary">How to select upstream server. (Lines starting with <code>#</code> are ignored)</p>
 				<div class="container">
 					<div class="row">` + radioOptions + `</div>
 				</div>
 			</fieldset>
-			<div class="mb-3">
+			<div>
 				<label for="bootstrap-text-area" class="form-label">
 					<h6>Bootstrap Servers</h6>
 					<p class="my-0 small text-secondary">Enter one server address per line. (Lines starting with <code>#</code> are ignored)</p>
@@ -409,23 +427,35 @@ func SettingsContent(props SettingsContentProps) string {
 		</div>
 	</div>
 </div>
-<div class="col col-lg-6">
-	<div class="card mb-4">
-		<div class="card-body">
-			<label for="filters-text-area" class="form-label">
-				<h6>Filters</h6>
-				<p class="my-0 small text-secondary">Enter one url per line. ABP and hosts file links are supported.</p>
-			</label>
-			<code-input language="ignore" placeholder="" id="filters-text-area" name="filters">` + strings.Join(props.cfg.Filters, "\n") + `</code-input>
+<div class="col col-lg-6 d-flex flex-column gap-4">
+	<div class="card">
+		<div class="card-body d-flex flex-column gap-4">
+			<div>
+				<label for="filters-text-area" class="form-label">
+					<h6>Filters</h6>
+					<p class="my-0 small text-secondary">Enter one url per line. ABP and hosts file links are supported.</p>
+				</label>
+				<code-input language="ignore" placeholder="" id="filters-text-area" name="filters">` + strings.Join(props.cfg.Filters, "\n") + `</code-input>
+			</div>
+			<div>
+				<label for="filter-update-interval" class="form-label">
+					<h6>Automatic Filter Update Interval</h6>
+					<p class="my-0 small text-secondary">Number of seconds between each update check.</p>
+					<p class="my-0 small text-secondary">(defaults to 86400, or 1 day; 0 means never update)</p>
+				</label>
+				<input class="form-control" type="number" name="filter-update-interval" placeholder="86400" value="` + filterUpdateIntervalValue + `" />
+			</div>
 		</div>
 	</div>
 	<div class="card">
-		<div class="card-body">
-			<label for="rewrites-text-area" class="form-label">
-				<h6>Rewrites</h6>
-				<p class="my-0 small text-secondary">Enter in the format of <code>/etc/hosts</code>. (Lines starting with <code>#</code> are ignored)</p>
-			</label>
-			<code-input language="ignore" placeholder="" id="rewrites-text-area" name="rewrites">` + strings.Join(props.cfg.Rewrites, "\n") + `</code-input>
+		<div class="card-body d-flex flex-column gap-4">
+			<div>
+				<label for="rewrites-text-area" class="form-label">
+					<h6>Rewrites</h6>
+					<p class="my-0 small text-secondary">Enter in the format of <code>/etc/hosts</code>. (Lines starting with <code>#</code> are ignored)</p>
+				</label>
+				<code-input language="ignore" placeholder="" id="rewrites-text-area" name="rewrites">` + strings.Join(props.cfg.Rewrites, "\n") + `</code-input>
+			</div>
 		</div>
 	</div>
 </div>

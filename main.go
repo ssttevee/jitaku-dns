@@ -28,6 +28,11 @@ type Jitaku struct {
 	configPath string
 
 	logChan chan *internal.LogEntry
+
+	updateFilterTimer *time.Timer
+
+	appctx context.Context
+	close  context.CancelFunc
 }
 
 func writeConfig(cfg *config.Config, configPath string) error {
@@ -74,9 +79,54 @@ func NewJitakuFromConfigPath(configPath string) (*Jitaku, error) {
 }
 
 func NewJitaku(config *config.Config) *Jitaku {
-	return &Jitaku{
+	ctx, cancel := context.WithCancel(context.Background())
+	j := &Jitaku{
 		logChan:           make(chan *internal.LogEntry, 1),
 		InitializedConfig: config.Initialize(),
+		appctx:            ctx,
+		close:             cancel,
+	}
+
+	j.startFilterUpdater(ctx)
+
+	return j
+}
+
+func (j *Jitaku) startFilterUpdater(ctx context.Context) {
+	if j.updateFilterTimer == nil && j.InitializedConfig.FilterUpdateIntervalDuration() > 0 {
+		go func() {
+			defer func() {
+				j.updateFilterTimer = nil
+			}()
+
+			j.updateFilterTimer = time.NewTimer(j.InitializedConfig.FilterUpdateIntervalDuration())
+			for {
+				j.updateFilterTimer.Reset(j.InitializedConfig.FilterUpdateIntervalDuration())
+
+				select {
+				case <-ctx.Done():
+					return
+				case <-j.updateFilterTimer.C:
+					start := time.Now()
+					log.Println("INFO: Updating filters")
+					for _, upstream := range j.InitializedConfig.Filters {
+						if err := upstream.(*config.LazyUpstream).Reinit(ctx); err != nil {
+							log.Printf("WARN: Failed to update filter %q: %v", upstream.String(), err)
+						}
+					}
+
+					log.Printf("INFO: Updated filters in %v", time.Since(start))
+				}
+			}
+		}()
+	} else if j.updateFilterTimer != nil {
+		if !j.updateFilterTimer.Stop() {
+			select {
+			case <-j.updateFilterTimer.C:
+			}
+		}
+
+		j.updateFilterTimer.Reset(j.InitializedConfig.FilterUpdateIntervalDuration())
 	}
 }
 
@@ -111,6 +161,8 @@ func (h *Jitaku) SetConfig(ctx context.Context, c *config.Config) error {
 	}
 
 	h.InitializedConfig = initialized
+
+	h.startFilterUpdater(h.appctx)
 
 	return nil
 }
@@ -175,6 +227,8 @@ func main() {
 	if err != nil {
 		log.Fatalf("ERROR: Failed to create server: %v", err)
 	}
+
+	defer h.close()
 
 	host := flag.String("host", "0.0.0.0", "address to listen on (defaults to \"0.0.0.0\")")
 	port := flag.Int("port", 53, "port to listen on")
