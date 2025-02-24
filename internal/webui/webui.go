@@ -547,6 +547,25 @@ type navItem struct {
 	DynamicPath func(r *http.Request) string
 }
 
+func (item navItem) ToHTML(r *http.Request) string {
+	path := item.Path
+	if item.DynamicPath != nil {
+		dp := item.DynamicPath(r)
+		if dp != "" {
+			path = dp
+		}
+	}
+
+	var extraClasses string
+	var extraAttrs string
+	if path == r.URL.Path {
+		extraClasses = " active"
+		extraAttrs = ` aria-current="page"`
+	}
+
+	return `<li class="nav-item"><a class="nav-link` + extraClasses + `"` + extraAttrs + ` href="` + path + `">` + item.Name + `</a></li>`
+}
+
 var defaultNavItems = []navItem{
 	{
 		Name: "Dashboard",
@@ -588,22 +607,15 @@ func RootLayout(props RootLayoutProps, children ...string) string {
 
 	var navItemsHtml string
 	for _, item := range navItems {
-		path := item.Path
-		if item.DynamicPath != nil {
-			dp := item.DynamicPath(props.req)
-			if dp != "" {
-				path = dp
-			}
-		}
+		navItemsHtml += item.ToHTML(props.req)
+	}
 
-		var extraClasses string
-		var extraAttrs string
-		if path == props.req.URL.Path {
-			extraClasses = " active"
-			extraAttrs = ` aria-current="page"`
-		}
-
-		navItemsHtml += `<li class="nav-item"><a class="nav-link` + extraClasses + `"` + extraAttrs + ` href="` + path + `">` + item.Name + `</a></li>`
+	var externalNavItemsHtml string
+	for _, item := range append(append([]navItem{}, gokrazyExternalNavItems...), navItem{
+		Name: "Github",
+		Path: "https://github.com/ssttevee/jitaku-dns",
+	}) {
+		externalNavItemsHtml += item.ToHTML(props.req)
 	}
 
 	var preload string
@@ -650,6 +662,9 @@ func RootLayout(props RootLayoutProps, children ...string) string {
 		</button>
 		<div class="collapse navbar-collapse" id="navbarSupportedContent">
 			<ul class="navbar-nav me-auto mb-2 mb-lg-0">` + navItemsHtml + `</ul>
+		</div>
+		<div class="d-flex">
+			<ul class="navbar-nav me-auto mb-2 mb-lg-0">` + externalNavItemsHtml + `</ul>
 		</div>
 	</div>
 </nav>

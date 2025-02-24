@@ -22,6 +22,8 @@ var gokrazyNavItems = []navItem{
 	},
 }
 
+var gokrazyExternalNavItems = []navItem{}
+
 func registerGoKrazyRoutes(mux *http.ServeMux) {
 	u, _ := gokrazyutil.DashboardURL()
 	parsed, _ := url.Parse(u)
@@ -36,7 +38,7 @@ func registerGoKrazyRoutes(mux *http.ServeMux) {
 				port = ":" + port
 			}
 
-			gokrazyNavItems = append(gokrazyNavItems, navItem{
+			gokrazyExternalNavItems = append(gokrazyExternalNavItems, navItem{
 				Name: "gokrazy",
 				Path: u,
 				DynamicPath: func(r *http.Request) string {
