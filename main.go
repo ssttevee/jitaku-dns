@@ -45,6 +45,7 @@ type Jitaku struct {
 
 	cache4 sync.Map
 	cache6 sync.Map
+	ccache sync.Map
 }
 
 func writeConfig(cfg *config.Config, configPath string) error {
@@ -207,6 +208,8 @@ func (c *Jitaku) cacheForType(t dns.Type) *sync.Map {
 		return &c.cache4
 	case dns.Type(dns.TypeAAAA):
 		return &c.cache6
+	case dns.Type(dns.TypeCNAME):
+		return &c.ccache
 	default:
 		return nil
 	}
@@ -214,52 +217,44 @@ func (c *Jitaku) cacheForType(t dns.Type) *sync.Map {
 
 func (c *Jitaku) getCachedResponse(r *dns.Msg) (*internal.MessageResult, bool) {
 	start := time.Now()
-	if r.Opcode != dns.OpcodeQuery || len(r.Question) < 1 {
+	if r.Opcode != dns.OpcodeQuery || len(r.Question) != 1 {
+		return nil, false
+	}
+
+	q := r.Question[0]
+	cache := c.cacheForType(dns.Type(q.Qtype))
+	if cache == nil {
+		return nil, false
+	}
+
+	name := dns.Fqdn(q.Name)
+	name = strings.TrimSuffix(name, ".")
+
+	value, ok := cache.Load(name)
+	if !ok {
+		return nil, false
+	}
+
+	entry, ok := value.(*cacheEntry)
+	if !ok {
+		return nil, false
+	}
+
+	if entry.exp.Before(time.Now()) {
+		// expired
+		cache.Delete(name)
 		return nil, false
 	}
 
 	res := &dns.Msg{}
 	res.SetReply(r)
-	var ups upstream.Upstream
-	for _, q := range r.Question {
-		if q.Qtype != dns.TypeA && q.Qtype != dns.TypeAAAA {
-			// only cache A and AAAA queries
-			return nil, false
-		}
-
-		name := dns.Fqdn(q.Name)
-		name = strings.TrimSuffix(name, ".")
-
-		cache := c.cacheForType(dns.Type(q.Qtype))
-		if cache == nil {
-			return nil, false
-		}
-
-		value, ok := cache.Load(name)
-		if !ok {
-			return nil, false
-		}
-
-		entry, ok := value.(*cacheEntry)
-		if !ok {
-			return nil, false
-		}
-
-		if entry.exp.Before(time.Now()) {
-			// expired
-			cache.Delete(name)
-			return nil, false
-		}
-
-		res.Answer = append(res.Answer, entry.ans...)
-		ups = entry.ups
-	}
+	res.Answer = entry.ans
 
 	return &internal.MessageResult{
 		Response: res,
 		Cached:   true,
 		Elapsed:  time.Since(start),
-		Upstream: ups,
+		Upstream: entry.ups,
 	}, true
 }
 
@@ -271,47 +266,42 @@ func (c *Jitaku) cacheResponse(res *internal.MessageResult) {
 	name := dns.Fqdn(res.Response.Question[0].Name)
 	name = strings.TrimSuffix(name, ".")
 
-	var ans4, ans6 []dns.RR
-	var ttl4, ttl6 uint32 = math.MaxUint32, math.MaxUint32
+	var ttl uint32 = math.MaxUint32
 	for _, rr := range res.Response.Answer {
-		switch rr := rr.(type) {
-		case *dns.A:
-			ans4 = append(ans4, rr)
-			if rr.Hdr.Ttl < ttl4 {
-				ttl4 = rr.Hdr.Ttl
-			}
-		case *dns.AAAA:
-			ans6 = append(ans6, rr)
-			if rr.Hdr.Ttl < ttl6 {
-				ttl6 = rr.Hdr.Ttl
-			}
+		h := rr.Header()
+		if h.Ttl < ttl {
+			ttl = h.Ttl
 		}
 	}
 
-	if len(ans4) > 0 && ttl4 < math.MaxUint32 {
-		c.cache4.Store(name, &cacheEntry{
-			ans: ans4,
-			exp: time.Now().Add(time.Duration(ttl4) * time.Second),
-			ups: res.Upstream,
-		})
-	}
+	if len(res.Response.Answer) > 0 && ttl < math.MaxUint32 {
+		var cache *sync.Map
+		switch res.Response.Question[0].Qtype {
+		case dns.TypeA:
+			cache = &c.cache4
+		case dns.TypeAAAA:
+			cache = &c.cache6
+		case dns.TypeCNAME:
+			cache = &c.ccache
+		}
 
-	if len(ans6) > 0 && ttl6 < math.MaxUint32 {
-		c.cache6.Store(name, &cacheEntry{
-			ans: ans6,
-			exp: time.Now().Add(time.Duration(ttl6) * time.Second),
-			ups: res.Upstream,
-		})
+		if cache != nil {
+			cache.Store(name, &cacheEntry{
+				ans: res.Response.Answer,
+				exp: time.Now().Add(time.Duration(ttl) * time.Second),
+				ups: res.Upstream,
+			})
+		}
 	}
 }
 
-func (c *Jitaku) processMessage(ctx context.Context, r *dns.Msg) (*internal.MessageResult, error) {
+func (c *Jitaku) ProcessMessage(ctx context.Context, r *dns.Msg) (*internal.MessageResult, error) {
 	res, ok := c.getCachedResponse(r)
 	if ok {
 		return res, nil
 	}
 
-	res, err := c.ProcessMessage(ctx, r)
+	res, err := c.InitializedConfig.ProcessMessage(ctx, r)
 	if err != nil {
 		return nil, err
 	}
@@ -324,7 +314,7 @@ func (c *Jitaku) processMessage(ctx context.Context, r *dns.Msg) (*internal.Mess
 }
 
 func (c *Jitaku) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
-	res, err := c.processMessage(context.Background(), r)
+	res, err := c.ProcessMessage(context.Background(), r)
 	if err != nil {
 		log.Printf("ERROR: Failed to process message: %v", err)
 	}
