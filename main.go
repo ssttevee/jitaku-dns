@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"math"
 	"net"
 	"net/http"
 	"os"
@@ -13,12 +14,14 @@ import (
 	"path"
 	"runtime"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
 	"github.com/miekg/dns"
 	"github.com/ssttevee/jitaku-dns/internal"
 	"github.com/ssttevee/jitaku-dns/internal/config"
+	"github.com/ssttevee/jitaku-dns/internal/dns/upstream"
 	"github.com/ssttevee/jitaku-dns/internal/webui"
 )
 
@@ -39,6 +42,9 @@ type Jitaku struct {
 
 	appctx context.Context
 	close  context.CancelFunc
+
+	cache4 sync.Map
+	cache6 sync.Map
 }
 
 func writeConfig(cfg *config.Config, configPath string) error {
@@ -189,15 +195,136 @@ func (h *Jitaku) SetConfig(ctx context.Context, c *config.Config) error {
 	return nil
 }
 
-func (c *Jitaku) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
-	// if len(r.Question) > 0 {
-	// 	log.Printf("INFO: Received request with %d questions from %s", len(r.Question), w.RemoteAddr())
-	// 	for _, q := range r.Question {
-	// 		log.Printf("INFO:     %s %s", q.Name, dns.Type(q.Qtype))
-	// 	}
-	// }
+type cacheEntry struct {
+	ans []dns.RR
+	exp time.Time
+	ups upstream.Upstream
+}
 
-	res, err := c.ProcessMessage(context.Background(), r)
+func (c *Jitaku) cacheForType(t dns.Type) *sync.Map {
+	switch t {
+	case dns.Type(dns.TypeA):
+		return &c.cache4
+	case dns.Type(dns.TypeAAAA):
+		return &c.cache6
+	default:
+		return nil
+	}
+}
+
+func (c *Jitaku) getCachedResponse(r *dns.Msg) (*internal.MessageResult, bool) {
+	start := time.Now()
+	if r.Opcode != dns.OpcodeQuery || len(r.Question) < 1 {
+		return nil, false
+	}
+
+	res := &dns.Msg{}
+	res.SetReply(r)
+	var ups upstream.Upstream
+	for _, q := range r.Question {
+		if q.Qtype != dns.TypeA && q.Qtype != dns.TypeAAAA {
+			// only cache A and AAAA queries
+			return nil, false
+		}
+
+		name := dns.Fqdn(q.Name)
+		name = strings.TrimSuffix(name, ".")
+
+		cache := c.cacheForType(dns.Type(q.Qtype))
+		if cache == nil {
+			return nil, false
+		}
+
+		value, ok := cache.Load(name)
+		if !ok {
+			return nil, false
+		}
+
+		entry, ok := value.(*cacheEntry)
+		if !ok {
+			return nil, false
+		}
+
+		if entry.exp.Before(time.Now()) {
+			// expired
+			cache.Delete(name)
+			return nil, false
+		}
+
+		res.Answer = append(res.Answer, entry.ans...)
+		ups = entry.ups
+	}
+
+	return &internal.MessageResult{
+		Response: res,
+		Cached:   true,
+		Elapsed:  time.Since(start),
+		Upstream: ups,
+	}, true
+}
+
+func (c *Jitaku) cacheResponse(res *internal.MessageResult) {
+	if res.Response.Opcode != dns.OpcodeQuery || len(res.Response.Question) != 1 || res.Cached {
+		return
+	}
+
+	name := dns.Fqdn(res.Response.Question[0].Name)
+	name = strings.TrimSuffix(name, ".")
+
+	var ans4, ans6 []dns.RR
+	var ttl4, ttl6 uint32 = math.MaxUint32, math.MaxUint32
+	for _, rr := range res.Response.Answer {
+		switch rr := rr.(type) {
+		case *dns.A:
+			ans4 = append(ans4, rr)
+			if rr.Hdr.Ttl < ttl4 {
+				ttl4 = rr.Hdr.Ttl
+			}
+		case *dns.AAAA:
+			ans6 = append(ans6, rr)
+			if rr.Hdr.Ttl < ttl6 {
+				ttl6 = rr.Hdr.Ttl
+			}
+		}
+	}
+
+	if len(ans4) > 0 && ttl4 < math.MaxUint32 {
+		c.cache4.Store(name, &cacheEntry{
+			ans: ans4,
+			exp: time.Now().Add(time.Duration(ttl4) * time.Second),
+			ups: res.Upstream,
+		})
+	}
+
+	if len(ans6) > 0 && ttl6 < math.MaxUint32 {
+		c.cache6.Store(name, &cacheEntry{
+			ans: ans6,
+			exp: time.Now().Add(time.Duration(ttl6) * time.Second),
+			ups: res.Upstream,
+		})
+	}
+}
+
+func (c *Jitaku) processMessage(ctx context.Context, r *dns.Msg) (*internal.MessageResult, error) {
+	res, ok := c.getCachedResponse(r)
+	if ok {
+		return res, nil
+	}
+
+	res, err := c.ProcessMessage(ctx, r)
+	if err != nil {
+		return nil, err
+	}
+
+	if res.Upstream.IsReal() {
+		c.cacheResponse(res)
+	}
+
+	return res, nil
+}
+
+func (c *Jitaku) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
+	res, err := c.processMessage(context.Background(), r)
 	if err != nil {
 		log.Printf("ERROR: Failed to process message: %v", err)
 	}

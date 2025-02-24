@@ -51,6 +51,10 @@ func NewRewriteUpstream(lines []string) *RewriteUpstream {
 	return up
 }
 
+func (c *RewriteUpstream) IsReal() bool {
+	return false
+}
+
 func (c *RewriteUpstream) Empty() bool {
 	return len(c.V4) == 0 && len(c.V6) == 0
 }

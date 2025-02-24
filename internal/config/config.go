@@ -145,6 +145,10 @@ type LazyUpstream struct {
 	upstream upstream.Upstream
 }
 
+func (l *LazyUpstream) IsReal() bool {
+	return l.Inner().IsReal()
+}
+
 func (l *LazyUpstream) Reinit(ctx context.Context) error {
 	s := strings.TrimSpace(l.server)
 	if len(s) > 0 && !strings.HasPrefix(s, "#") {

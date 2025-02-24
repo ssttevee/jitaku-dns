@@ -13,6 +13,10 @@ type DoHUpstream struct {
 	URL    string
 }
 
+func (c *DoHUpstream) IsReal() bool {
+	return true
+}
+
 func (d *DoHUpstream) String() string {
 	return d.URL
 }

@@ -9,10 +9,15 @@ import (
 type Upstream interface {
 	String() string
 	ForwardMessage(ctx context.Context, msg *dns.Msg) (*dns.Msg, error)
+	IsReal() bool
 	Close() error
 }
 
 type NoopUpstream struct{}
+
+func (n *NoopUpstream) IsReal() bool {
+	return false
+}
 
 func (n *NoopUpstream) String() string {
 	return "noop"

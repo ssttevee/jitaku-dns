@@ -43,6 +43,10 @@ func NewFilterUpstream(ctx context.Context, hc *http.Client, url string) (*Filte
 	}, nil
 }
 
+func (c *FilterUpstream) IsReal() bool {
+	return false
+}
+
 func (f *FilterUpstream) String() string {
 	return f.url
 }

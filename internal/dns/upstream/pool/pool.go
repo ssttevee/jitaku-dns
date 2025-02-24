@@ -20,6 +20,10 @@ type ConnPoolUpstream struct {
 	conns  []*dns.Conn
 }
 
+func (c *ConnPoolUpstream) IsReal() bool {
+	return true
+}
+
 func (c *ConnPoolUpstream) String() string {
 	net := c.Net
 	if net == "" {
