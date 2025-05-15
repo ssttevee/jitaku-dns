@@ -1,6 +1,8 @@
 /.envs
 /.vscode
 /.zed
+/build-configs
+/gokrazy
 /internal/webui/assets
 /internal/webui/assets_builtinassets_gen.go
 /out
