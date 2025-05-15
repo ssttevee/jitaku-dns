@@ -1,4 +1,4 @@
-//go:build !gokrazy
+//go:build !linux && !darwin
 
 package config
 
