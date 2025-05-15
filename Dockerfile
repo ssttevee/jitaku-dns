@@ -16,3 +16,5 @@ LABEL org.opencontainers.image.description="JitakuDNS"
 LABEL org.opencontainers.image.licenses=MIT
 
 ENTRYPOINT ["/main"]
+
+CMD ["-webui", "-webui-host=0.0.0.0"]
