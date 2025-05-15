@@ -54,3 +54,9 @@ make update
 # Build server and run an existing installation remotely
 make run
 ```
+
+## Docker
+
+```
+docker run -d --name jitaku-dns -v /etc/jitaku-dns -p 53:53 -p 8808:8808 ghcr.io/ssttevee/jitaku-dns:latest
+```
