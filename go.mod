@@ -1,10 +1,12 @@
 module github.com/ssttevee/jitaku-dns
 
-go 1.22.1
+go 1.24
+
+toolchain go1.24.3
 
 require (
 	github.com/diskfs/go-diskfs v1.5.0
-	github.com/gokrazy/updater v0.0.0-20240113102150-4ac511a17e33
+	github.com/gokrazy/updater v0.0.0-20250601065453-91649328574c
 	github.com/miekg/dns v1.1.62
 	gopkg.in/yaml.v3 v3.0.1
 )

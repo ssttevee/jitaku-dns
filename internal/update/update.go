@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"compress/gzip"
+	"context"
 	"fmt"
 	"io"
 	"io/fs"
@@ -73,7 +74,7 @@ func (r partitionRange) streamTo(target *updater.Target, name string, data []byt
 		return fmt.Errorf("failed to create range reader: %w", err)
 	}
 
-	if err := target.StreamTo(name, rd); err != nil {
+	if err := target.StreamTo(context.TODO(), name, rd); err != nil {
 		return err
 	}
 
@@ -126,7 +127,7 @@ func UpdateFromGZippedImage(data []byte) (reboot func() error, err error) {
 		return nil, fmt.Errorf("failed to get dashboard url: %w", err)
 	}
 
-	target, err := updater.NewTarget(url, http.DefaultClient)
+	target, err := updater.NewTarget(context.TODO(), url, http.DefaultClient)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create updater target: %w", err)
 	}
@@ -143,11 +144,11 @@ func UpdateFromGZippedImage(data []byte) (reboot func() error, err error) {
 
 	return func() error {
 		// switch to non-active partition
-		if err := target.Switch(); err != nil {
+		if err := target.Switch(context.TODO()); err != nil {
 			return fmt.Errorf("failed to switch root partition: %v", err)
 		}
 
-		if err := target.Reboot(); err != nil {
+		if err := target.Reboot(context.TODO()); err != nil {
 			return fmt.Errorf("failed to reboot: %v", err)
 		}
 
